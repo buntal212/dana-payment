@@ -16,6 +16,7 @@ class DanaWebhookService
     public function __construct(
         private DanaCredentialResolver $credentialResolver,
         private DanaSnapSignatureService $signatureService,
+        private DanaAmountFormatter $amountFormatter,
     ) {}
 
     /** @param array<string, string|null> $headers */
@@ -91,7 +92,7 @@ class DanaWebhookService
     {
         $referenceNo = $payload['originalReferenceNo'] ?? null;
         $amount = $payload['amount'] ?? null;
-        if (! is_string($referenceNo) || ! is_array($amount) || ! is_string($amount['value'] ?? null) || ! is_string($amount['currency'] ?? null) || $amount['value'] !== $payment->amount_minor.'.00' || $amount['currency'] !== $payment->currency || ($payment->provider_order_id !== null && $payment->provider_order_id !== $referenceNo)) {
+        if (! is_string($referenceNo) || ! is_array($amount) || ! is_string($amount['value'] ?? null) || ! is_string($amount['currency'] ?? null) || ! $this->amountFormatter->matchesIdr($payment->amount_minor, $amount['value']) || $amount['currency'] !== $payment->currency || ($payment->provider_order_id !== null && $payment->provider_order_id !== $referenceNo)) {
             $this->recordRejected($payment, $rawBody, 'payment_data_mismatch');
 
             throw new RuntimeException('Webhook DANA tidak valid.');

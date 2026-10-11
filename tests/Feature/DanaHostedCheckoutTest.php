@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Merchant;
 use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
+use App\Services\DanaAmountFormatter;
 use App\Services\DanaSnapSignatureService;
 use App\Services\MerchantApiKeyService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -42,6 +43,7 @@ class DanaHostedCheckoutTest extends TestCase
             $this->assertSame('https://api.sandbox.dana.id/payment-gateway/v1.0/debit/payment-host-to-host.htm', $request->url());
             $this->assertNotEmpty($request->header('X-SIGNATURE'));
             $this->assertSame('merchant-dana-001', $request->data()['merchantId']);
+            $this->assertSame(['value' => '10000.00', 'currency' => 'IDR'], $request->data()['amount']);
 
             return ['responseCode' => '2005400', 'referenceNo' => 'DANA-ORDER-001', 'webRedirectUrl' => 'https://checkout.sandbox.dana.id/session/001'];
         });
@@ -184,7 +186,7 @@ class DanaHostedCheckoutTest extends TestCase
             'originalPartnerReferenceNo' => $payment->public_id,
             'originalReferenceNo' => $payment->provider_order_id,
             'merchantId' => 'merchant-dana-001',
-            'amount' => ['value' => $amount ?? $payment->amount_minor.'.00', 'currency' => 'IDR'],
+            'amount' => ['value' => $amount ?? app(DanaAmountFormatter::class)->formatIdr($payment->amount_minor), 'currency' => 'IDR'],
             'latestTransactionStatus' => $status,
             'createdTime' => '2026-10-11T10:00:00+07:00',
             'finishedTime' => '2026-10-11T10:01:00+07:00',

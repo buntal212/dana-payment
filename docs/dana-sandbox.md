@@ -24,6 +24,12 @@ Nilai `notification_url` harus dapat diakses publik melalui HTTPS dan persis sam
 
 Konfigurasi lama dengan kunci JSON `dana_public_key` sengaja tidak lagi diterima. Ganti dengan `dana_webhook_public_key` yang telah diverifikasi. Tanpa kunci tersebut, resolver menolak membuat checkout dan memproses webhook; aplikasi tidak melakukan fallback ke credential `.env` atau merchant lain.
 
+## Kontrak nominal IDR
+
+`payments.amount_minor` dan `payment_refunds.amount_minor` menyimpan rupiah utuh sebagai integer; contoh `10000` berarti Rp10.000. DANA mengharuskan wire value dua desimal, sehingga nilai tersebut selalu dikirim dan dibandingkan sebagai string `10000.00`. `DanaAmountFormatter` melakukan konversi dengan operasi integer/string saja, tanpa floating-point.
+
+Tidak ada migrasi data untuk transaksi historis: nilainya sudah memakai satuan yang benar. Mengalikan atau membagi `amount_minor` yang tersimpan akan mengubah nominal transaksi secara salah.
+
 Gunakan perintah server-side berikut untuk membuat atau memperbarui konfigurasi merchant. Perintah meminta nilai non-rahasia secara interaktif dan membaca isi PEM dari berkas lokal tanpa mencetaknya:
 
 ```powershell

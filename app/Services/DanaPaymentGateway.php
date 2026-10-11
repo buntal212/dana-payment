@@ -16,6 +16,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
     public function __construct(
         private DanaCredentialResolver $credentialResolver,
         private DanaSnapSignatureService $signatureService,
+        private DanaAmountFormatter $amountFormatter,
     ) {}
 
     /** @return array{provider_order_id: string, checkout_url: string, expires_at: \DateTimeInterface} */
@@ -27,7 +28,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         $payload = [
             'partnerReferenceNo' => $payment->public_id,
             'merchantId' => $credentials->merchantId,
-            'amount' => ['value' => $this->formatIdr($payment->amount_minor), 'currency' => $payment->currency],
+            'amount' => ['value' => $this->amountFormatter->formatIdr($payment->amount_minor), 'currency' => $payment->currency],
             'validUpTo' => $expiresAt->format('Y-m-d\\TH:i:sP'),
             'urlParams' => [
                 ['url' => $credentials->returnUrl, 'type' => 'PAY_RETURN', 'isDeeplink' => 'N'],
@@ -75,10 +76,5 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         }
 
         return ['provider_order_id' => $responseBody['referenceNo'], 'checkout_url' => $responseBody['webRedirectUrl'], 'expires_at' => $expiresAt];
-    }
-
-    private function formatIdr(int $amountMinor): string
-    {
-        return $amountMinor.'.00';
     }
 }
