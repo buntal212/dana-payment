@@ -1,0 +1,47 @@
+name: Deploy DANA Payment
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dana-payment-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Laravel Production
+
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - dana-payment
+
+    timeout-minutes: 15
+
+    steps:
+      - name: Verify deployment runner
+        run: |
+          echo "Runner: $RUNNER_NAME"
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Commit: $GITHUB_SHA"
+
+      - name: Deploy DANA Payment
+        run: |
+          sudo -n -u kentang \
+            /usr/local/sbin/deploy-dana-payment
+
+      - name: Verify production HTTP
+        run: |
+          curl --fail --silent --show-error \
+            --max-time 20 \
+            --output /dev/null \
+            https://dana.udumbara.my.id/payment/finish
+
+          echo "Production HTTP check passed"
