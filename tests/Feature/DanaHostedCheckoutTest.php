@@ -29,7 +29,7 @@ class DanaHostedCheckoutTest extends TestCase
 
             public function verifyTransactional(string $method, string $relativePath, string $minifiedJsonBody, string $timestamp, string $signature, string $publicKey): bool
             {
-                return $signature === 'valid-signature';
+                return $signature === 'valid-signature' && $publicKey === 'verified-dana-public-key';
             }
         });
     }
@@ -84,6 +84,71 @@ class DanaHostedCheckoutTest extends TestCase
         $this->assertDatabaseCount('payment_webhooks', 2);
     }
 
+    public function test_wrong_dana_public_key_and_currency_mismatch_are_rejected(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-004', 'amount_minor' => 50_000]);
+        $config = $merchant->paymentConfigs()->firstOrFail();
+        $credentials = $config->encrypted_credentials;
+        $credentials['dana_webhook_public_key'] = 'merchant-public-key-must-not-verify-webhook';
+        $config->update(['encrypted_credentials' => $credentials]);
+
+        $this->postWebhook($this->finishNotifyPayload($payment, '00'))->assertBadRequest();
+
+        $credentials['dana_webhook_public_key'] = 'verified-dana-public-key';
+        $config->update(['encrypted_credentials' => $credentials]);
+        $payload = $this->finishNotifyPayload($payment, '00');
+        $payload['amount']['currency'] = 'USD';
+        $this->postWebhook($payload)->assertBadRequest();
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
+    }
+
+    public function test_retry_after_rejected_delivery_can_process_the_payment_once(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-005']);
+        $payload = $this->finishNotifyPayload($payment, '00');
+
+        $this->postWebhook($payload, 'invalid-signature')->assertBadRequest();
+        $this->postWebhook($payload)->assertOk();
+        $this->postWebhook($payload)->assertOk();
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'paid']);
+        $this->assertDatabaseCount('payment_events', 1);
+        $this->assertDatabaseCount('payment_webhooks', 2);
+    }
+
+    public function test_pending_payment_can_expire_and_a_later_paid_status_is_rejected(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-006']);
+
+        $this->postWebhook($this->finishNotifyPayload($payment, '05'))->assertOk();
+        $this->postWebhook($this->finishNotifyPayload($payment, '00'))->assertBadRequest();
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'expired']);
+        $this->assertDatabaseCount('payment_events', 1);
+        $this->assertDatabaseHas('payment_webhooks', ['payment_id' => $payment->id, 'processing_status' => 'rejected', 'error_code' => 'illegal_status_transition']);
+    }
+
+    public function test_webhook_cannot_update_a_payment_for_another_merchant(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $config = $merchant->paymentConfigs()->firstOrFail();
+        $credentials = $config->encrypted_credentials;
+        $credentials['merchant_id'] = 'merchant-dana-foreign';
+        $config->update(['partner_id' => 'partner-dana-foreign', 'encrypted_credentials' => $credentials]);
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-007']);
+        $payload = $this->finishNotifyPayload($payment, '00');
+
+        // Header dan payload milik merchant lain tidak boleh memperbarui payment,
+        // sekalipun partner reference-nya valid.
+        $this->postWebhook($payload)->assertBadRequest();
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
+    }
+
     /** @return array{0: Merchant, 1: string} */
     private function merchantWithDanaConfig(): array
     {
@@ -95,7 +160,7 @@ class DanaHostedCheckoutTest extends TestCase
             'encrypted_credentials' => [
                 'merchant_id' => 'merchant-dana-001',
                 'private_key' => 'test-private-key',
-                'dana_public_key' => 'test-public-key',
+                'dana_webhook_public_key' => 'verified-dana-public-key',
                 'origin' => 'merchant.example',
                 'channel_id' => '95221',
                 'notification_url' => 'https://merchant.example/api/v1/webhooks/dana',

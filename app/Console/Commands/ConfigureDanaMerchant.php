@@ -9,7 +9,7 @@ use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
-#[Signature('merchant:dana:configure {merchant : Kode merchant} {--private-key-path= : Path PEM private key} {--public-key-path= : Path PEM public key DANA}')]
+#[Signature('merchant:dana:configure {merchant : Kode merchant} {--private-key-path= : Path PEM private key merchant} {--public-key-path= : Path PEM public key webhook DANA yang diverifikasi}')]
 #[Description('Menyimpan konfigurasi DANA Sandbox merchant secara terenkripsi')]
 class ConfigureDanaMerchant extends Command
 {
@@ -17,7 +17,7 @@ class ConfigureDanaMerchant extends Command
     {
         $merchant = Merchant::query()->where('code', $this->argument('merchant'))->firstOrFail();
         $privateKeyPath = $this->option('private-key-path') ?? $this->ask('Path PEM private key merchant');
-        $publicKeyPath = $this->option('public-key-path') ?? $this->ask('Path PEM public key DANA Sandbox');
+        $publicKeyPath = $this->option('public-key-path') ?? $this->ask('Path PEM public key webhook DANA Sandbox yang diverifikasi dari dokumentasi atau portal resmi');
         $privateKey = $this->readPem((string) $privateKeyPath, 'private key merchant');
         $publicKey = $this->readPem((string) $publicKeyPath, 'public key DANA');
 
@@ -31,7 +31,7 @@ class ConfigureDanaMerchant extends Command
                     'encrypted_credentials' => [
                         'merchant_id' => (string) $this->ask('DANA Merchant ID'),
                         'private_key' => $privateKey,
-                        'dana_public_key' => $publicKey,
+                        'dana_webhook_public_key' => $publicKey,
                         'origin' => (string) $this->ask('ORIGIN'),
                         'channel_id' => (string) $this->ask('CHANNEL-ID'),
                         'notification_url' => (string) $this->ask('URL NOTIFICATION HTTPS'),

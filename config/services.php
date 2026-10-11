@@ -36,14 +36,10 @@ return [
     ],
 
     'dana' => [
-        'environment' => env('DANA_ENVIRONMENT', 'sandbox'),
         'base_url' => env('DANA_SANDBOX_BASE_URL', 'https://api.sandbox.dana.id'),
         'timeout' => env('DANA_TIMEOUT', 8),
         'connect_timeout' => env('DANA_CONNECT_TIMEOUT', 3),
         'webhook_relative_path' => env('DANA_WEBHOOK_RELATIVE_PATH', '/api/v1/webhooks/dana'),
-        'partner_id' => env('DANA_PARTNER_ID'),
-        'private_key' => env('DANA_PRIVATE_KEY'),
-        'api_secret' => env('DANA_API_SECRET'),
     ],
 
 ];

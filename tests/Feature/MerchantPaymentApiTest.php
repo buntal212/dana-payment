@@ -127,7 +127,7 @@ class MerchantPaymentApiTest extends TestCase
             'encrypted_credentials' => [
                 'merchant_id' => 'merchant-test',
                 'private_key' => 'test-private-key',
-                'dana_public_key' => 'test-public-key',
+                'dana_webhook_public_key' => 'verified-dana-public-key',
                 'origin' => 'merchant.example',
                 'channel_id' => '95221',
                 'notification_url' => 'https://merchant.example/api/v1/webhooks/dana',

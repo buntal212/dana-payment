@@ -15,7 +15,7 @@ class DanaCredentialResolver
             throw new LogicException('Konfigurasi DANA merchant belum aktif.');
         }
 
-        foreach (['merchant_id', 'private_key', 'dana_public_key', 'origin', 'channel_id', 'notification_url', 'mcc'] as $field) {
+        foreach (['merchant_id', 'private_key', 'dana_webhook_public_key', 'origin', 'channel_id', 'notification_url', 'mcc'] as $field) {
             if (! is_string($credentials[$field] ?? null) || $credentials[$field] === '') {
                 throw new LogicException('Konfigurasi DANA merchant tidak lengkap.');
             }
@@ -29,7 +29,7 @@ class DanaCredentialResolver
             partnerId: $config->partner_id,
             merchantId: $credentials['merchant_id'],
             privateKey: $credentials['private_key'],
-            danaPublicKey: $credentials['dana_public_key'],
+            danaPublicKey: $credentials['dana_webhook_public_key'],
             origin: $credentials['origin'],
             channelId: $credentials['channel_id'],
             notificationUrl: $credentials['notification_url'],

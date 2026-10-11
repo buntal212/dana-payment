@@ -6,6 +6,7 @@ use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
 use App\Models\PaymentEvent;
 use App\Models\PaymentWebhook;
+use DateTimeImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -53,20 +54,36 @@ class DanaWebhookService
             throw new RuntimeException('Webhook DANA tidak dapat diproses.');
         }
 
-        $credentials = $this->credentialResolver->resolve($config);
+        try {
+            $credentials = $this->credentialResolver->resolve($config);
+            $minifiedBody = $this->signatureService->minifyJson($rawBody);
+        } catch (\LogicException|\JsonException) {
+            $this->recordRejected($payment, $rawBody, 'config_or_payload_invalid');
+
+            throw new RuntimeException('Webhook DANA tidak dapat diproses.');
+        }
         $timestamp = $headers['x-timestamp'] ?? null;
         $signature = $headers['x-signature'] ?? null;
         $partnerId = $headers['x-partner-id'] ?? null;
         $merchantId = $payload['merchantId'] ?? null;
 
-        if (! is_string($timestamp) || ! is_string($signature) || $partnerId !== $credentials->partnerId || $merchantId !== $credentials->merchantId || ! $this->signatureService->verifyTransactional('POST', (string) config('services.dana.webhook_relative_path'), $this->signatureService->minifyJson($rawBody), $timestamp, $signature, $credentials->danaPublicKey)) {
+        if (! is_string($timestamp)
+            || ! $this->isJakartaTimestamp($timestamp)
+            || ! is_string($signature)
+            || ! is_string($merchantId)
+            || ! hash_equals($credentials->partnerId, (string) $partnerId)
+            || ! hash_equals($credentials->merchantId, $merchantId)
+            || ! $this->signatureService->verifyTransactional('POST', (string) config('services.dana.webhook_relative_path'), $minifiedBody, $timestamp, $signature, $credentials->danaPublicKey)) {
             $this->recordRejected($payment, $rawBody, 'signature_or_identity_invalid');
 
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
 
         $this->validatePaymentPayload($payment, $payload, $rawBody);
-        $this->applyPaymentStatus($payment, $payload, $rawBody);
+
+        if (! $this->applyPaymentStatus($payment, $payload, $rawBody)) {
+            throw new RuntimeException('Webhook DANA tidak valid.');
+        }
     }
 
     /** @param array<string, mixed> $payload */
@@ -82,9 +99,10 @@ class DanaWebhookService
     }
 
     /** @param array<string, mixed> $payload */
-    private function applyPaymentStatus(Payment $payment, array $payload, string $rawBody): void
+    private function applyPaymentStatus(Payment $payment, array $payload, string $rawBody): bool
     {
         $providerReference = $payload['originalReferenceNo'];
+        $payloadHash = hash('sha256', $rawBody);
         $targetStatus = match ($payload['latestTransactionStatus'] ?? null) {
             '00' => 'paid',
             '05' => 'expired',
@@ -97,30 +115,44 @@ class DanaWebhookService
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
 
-        DB::transaction(function () use ($payment, $providerReference, $rawBody, $targetStatus): void {
-            $webhook = PaymentWebhook::query()->firstOrCreate(
-                ['provider' => 'dana', 'environment' => $payment->environment, 'provider_event_id' => $providerReference],
-                [
-                    'merchant_id' => $payment->merchant_id,
-                    'payment_id' => $payment->getKey(),
-                    'payload_sha256' => hash('sha256', $rawBody),
-                    'signature_valid' => true,
-                    'processing_status' => 'received',
-                    'attempts' => 0,
-                ],
-            );
+        return DB::transaction(function () use ($payment, $providerReference, $payloadHash, $targetStatus): bool {
+            // Kunci payment sebelum membaca fingerprint payload agar callback
+            // paralel tidak dapat sama-sama menerapkan transisi status.
+            $lockedPayment = Payment::query()->lockForUpdate()->findOrFail($payment->getKey());
 
-            if (! $webhook->wasRecentlyCreated) {
-                return;
+            $webhook = PaymentWebhook::query()
+                ->where('payment_id', $lockedPayment->getKey())
+                ->where('provider', 'dana')
+                ->where('environment', $lockedPayment->environment)
+                ->where('payload_sha256', $payloadHash)
+                ->where('processing_status', 'processed')
+                ->lockForUpdate()
+                ->first();
+            if ($webhook !== null) {
+                return true;
             }
 
-            $lockedPayment = Payment::query()->lockForUpdate()->findOrFail($payment->getKey());
+            // Finish Notify mendokumentasikan referensi transaksi, bukan ID event.
+            // provider_event_id lama dibiarkan nullable; deduplikasi memakai
+            // payload bertanda tangan yang persis sama untuk payment ini.
+            $webhook = PaymentWebhook::query()->create([
+                'merchant_id' => $lockedPayment->merchant_id,
+                'payment_id' => $lockedPayment->getKey(),
+                'provider' => 'dana',
+                'environment' => $lockedPayment->environment,
+                'payload_sha256' => $payloadHash,
+                'provider_event_id' => null,
+                'signature_valid' => true,
+                'processing_status' => 'received',
+                'attempts' => 1,
+            ]);
+
             if ($lockedPayment->status !== 'pending' && $lockedPayment->status !== $targetStatus) {
                 $webhook->update(['processing_status' => 'rejected', 'attempts' => 1, 'processed_at' => now(), 'error_code' => 'illegal_status_transition']);
 
                 Log::warning('Webhook DANA memiliki transisi status ilegal.', ['payment_id' => $lockedPayment->getKey(), 'target_status' => $targetStatus]);
 
-                return;
+                return false;
             }
 
             if ($lockedPayment->status === 'pending') {
@@ -142,6 +174,8 @@ class DanaWebhookService
             }
 
             $webhook->update(['processing_status' => 'processed', 'attempts' => 1, 'processed_at' => now()]);
+
+            return true;
         });
     }
 
@@ -162,5 +196,12 @@ class DanaWebhookService
         ]);
 
         Log::warning('Webhook DANA ditolak.', ['payment_id' => $payment?->getKey(), 'error_code' => $errorCode]);
+    }
+
+    private function isJakartaTimestamp(string $timestamp): bool
+    {
+        $date = DateTimeImmutable::createFromFormat('Y-m-d\\TH:i:sP', $timestamp);
+
+        return $date !== false && $date->format('Y-m-d\\TH:i:sP') === $timestamp && $date->format('P') === '+07:00';
     }
 }

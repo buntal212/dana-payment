@@ -12,7 +12,7 @@ Simpan JSON berikut melalui jalur administratif tepercaya pada `encrypted_creden
 {
   "merchant_id": "DANA merchant ID",
   "private_key": "PEM private key merchant",
-  "dana_public_key": "PEM public key DANA Sandbox",
+  "dana_webhook_public_key": "PEM public key DANA Sandbox untuk verifikasi webhook",
   "origin": "domain-aplikasi.example",
   "channel_id": "CHANNEL-ID dari onboarding",
   "notification_url": "https://gateway.example/api/v1/webhooks/dana",
@@ -20,7 +20,9 @@ Simpan JSON berikut melalui jalur administratif tepercaya pada `encrypted_creden
 }
 ```
 
-Nilai `notification_url` harus dapat diakses publik melalui HTTPS dan persis sama dengan endpoint yang didaftarkan di Portal DANA. Jangan memasukkan credential melalui argumen Artisan, source code, log, atau repository.
+Nilai `notification_url` harus dapat diakses publik melalui HTTPS dan persis sama dengan endpoint yang didaftarkan di Portal DANA. `dana_webhook_public_key` harus berasal dari sumber resmi DANA dan **bukan** public key pasangan private key merchant. Dokumentasi autentikasi DANA saat ini mempublikasikan public key Sandbox; operator harus mengambil serta memverifikasinya dari [dokumentasi resmi DANA](https://dashboard.dana.id/api-docs-v2/guide/authentication/authentication-asymmetric) sebelum mengaktifkan konfigurasi. Jangan memasukkan credential melalui argumen Artisan, source code, log, atau repository.
+
+Konfigurasi lama dengan kunci JSON `dana_public_key` sengaja tidak lagi diterima. Ganti dengan `dana_webhook_public_key` yang telah diverifikasi. Tanpa kunci tersebut, resolver menolak membuat checkout dan memproses webhook; aplikasi tidak melakukan fallback ke credential `.env` atau merchant lain.
 
 Gunakan perintah server-side berikut untuk membuat atau memperbarui konfigurasi merchant. Perintah meminta nilai non-rahasia secara interaktif dan membaca isi PEM dari berkas lokal tanpa mencetaknya:
 
@@ -41,7 +43,9 @@ DANA_WEBHOOK_RELATIVE_PATH=/api/v1/webhooks/dana
 
 `POST /api/v1/payments` membuat payment berstatus `pending`, kemudian meminta Create Order DANA dengan `partnerReferenceNo` berupa `payments.public_id`. Respons hanya disimpan bila `responseCode` adalah `2005400` dan memiliki `referenceNo` serta `webRedirectUrl`. Status tetap `pending` hingga Finish Notify tervalidasi.
 
-Finish Notify divalidasi menggunakan public key DANA untuk merchant payment yang ditemukan dari `originalPartnerReferenceNo`. Aplikasi memeriksa `X-PARTNER-ID`, `merchantId`, signature SNAP, referensi DANA, nominal, currency, dan transisi status. Status `00` menjadi `paid`; status `05` menjadi `expired`. Notifikasi yang sama aman diulang menggunakan unique key webhook DANA.
+Finish Notify divalidasi menggunakan public key DANA untuk konfigurasi merchant yang ditemukan dari `originalPartnerReferenceNo`, `provider`, dan `environment`. Aplikasi memeriksa `X-PARTNER-ID`, `merchantId`, signature SNAP, referensi DANA, nominal, currency, dan transisi status. Status `00` menjadi `paid`; status `05` menjadi `expired`.
+
+`originalReferenceNo` diperlakukan sebagai referensi transaksi DANA, bukan ID event webhook: dokumentasi yang diaudit tidak menjamin nilai itu unik per pengiriman webhook. Karena itu `provider_event_id` dibiarkan `NULL`. Callback diserialkan dengan penguncian baris payment dan deduplikasi dilakukan berdasarkan SHA-256 dari payload mentah pada payment yang sama. Pembaruan status, event pembayaran, dan catatan webhook valid berada dalam satu transaksi database. Pengiriman ulang payload yang sama tidak menciptakan transisi kedua; retry setelah penolakan dapat diproses kembali.
 
 ## Catatan path webhook
 
@@ -54,3 +58,9 @@ php artisan test tests/Feature/DanaHostedCheckoutTest.php --compact
 ```
 
 Test memakai `Http::fake()` dan signature service tiruan; tidak ada request yang dikirim ke Sandbox. Setelah credential dan callback dikonfigurasi di lingkungan Sandbox, lakukan UAT melalui Merchant Portal DANA dan gunakan `webRedirectUrl` dari respons payment untuk mensimulasikan pembayaran.
+
+Sebelum deployment, jalankan pengujian feature dan pastikan worker database produksi memakai MySQL/InnoDB agar `lockForUpdate()` memberi serialisasi callback lintas proses:
+
+```powershell
+php artisan test tests/Feature/DanaHostedCheckoutTest.php --compact
+```
