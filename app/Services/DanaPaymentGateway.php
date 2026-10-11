@@ -69,7 +69,15 @@ class DanaPaymentGateway implements PaymentGatewayInterface
                 'payment_id' => $payment->getKey(),
                 'merchant_id' => $payment->merchant_id,
                 'http_status' => $response->status(),
-                'response_code' => is_array($responseBody) ? ($responseBody['responseCode'] ?? null) : null,
+                'response_code' => is_array($responseBody)
+                    ? ($responseBody['responseCode'] ?? null)
+                    : null,
+                'response_message' => is_array($responseBody)
+                    ? ($responseBody['responseMessage'] ?? null)
+                    : null,
+                'debug_message' => is_array($responseBody)
+                    ? ($responseBody['additionalInfo']['debugMessage'] ?? null)
+                    : null,
             ]);
 
             throw new RuntimeException('Checkout DANA belum dapat dibuat.');
