@@ -58,6 +58,11 @@ class DanaHostedCheckoutTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_finish_notify_signature_uses_official_path_by_default(): void
+    {
+        $this->assertSame('/v1.0/debit/notify', config('services.dana.webhook_relative_path'));
+    }
+
     public function test_valid_finish_notify_marks_pending_payment_paid_and_duplicate_is_safe(): void
     {
         [$merchant] = $this->merchantWithDanaConfig();
@@ -191,7 +196,7 @@ class DanaHostedCheckoutTest extends TestCase
     {
         $body = json_encode($payload, JSON_THROW_ON_ERROR);
         $timestamp = '2026-10-11T10:01:00+07:00';
-        $signature ??= app(DanaSnapSignatureService::class)->signTransactional('POST', '/api/v1/webhooks/dana', app(DanaSnapSignatureService::class)->minifyJson($body), $timestamp, 'test-private-key');
+        $signature ??= app(DanaSnapSignatureService::class)->signTransactional('POST', (string) config('services.dana.webhook_relative_path'), app(DanaSnapSignatureService::class)->minifyJson($body), $timestamp, 'test-private-key');
 
         return $this->call('POST', '/api/v1/webhooks/dana', [], [], [], [
             'CONTENT_TYPE' => 'application/json',

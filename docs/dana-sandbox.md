@@ -36,7 +36,7 @@ Konfigurasi aplikasi yang tidak rahasia tersedia melalui environment, tanpa meng
 DANA_SANDBOX_BASE_URL=https://api.sandbox.dana.id
 DANA_TIMEOUT=8
 DANA_CONNECT_TIMEOUT=3
-DANA_WEBHOOK_RELATIVE_PATH=/api/v1/webhooks/dana
+DANA_WEBHOOK_RELATIVE_PATH=/v1.0/debit/notify
 ```
 
 ## Alur
@@ -47,9 +47,11 @@ Finish Notify divalidasi menggunakan public key DANA untuk konfigurasi merchant 
 
 `originalReferenceNo` diperlakukan sebagai referensi transaksi DANA, bukan ID event webhook: dokumentasi yang diaudit tidak menjamin nilai itu unik per pengiriman webhook. Karena itu `provider_event_id` dibiarkan `NULL`. Callback diserialkan dengan penguncian baris payment dan deduplikasi dilakukan berdasarkan SHA-256 dari payload mentah pada payment yang sama. Pembaruan status, event pembayaran, dan catatan webhook valid berada dalam satu transaksi database. Pengiriman ulang payload yang sama tidak menciptakan transisi kedua; retry setelah penolakan dapat diproses kembali.
 
-## Catatan path webhook
+## Redirect pelanggan dan path webhook
 
-Dokumentasi Hosted Checkout DANA menyebut path ASPI `/v1.0/debit/notify`, sementara deployment ini menggunakan `/api/v1/webhooks/dana` sesuai kebutuhan gateway. SNAP signature mencakup relative path. Sebelum UAT, konfirmasikan path yang DANA gunakan untuk menandatangani callback dan set `DANA_WEBHOOK_RELATIVE_PATH` sesuai nilai itu; URL notifikasi yang didaftarkan harus sama.
+Set `callback_url` merchant ke URL HTTPS halaman redirect aplikasi, misalnya `https://gateway.example/payment/finish`. Halaman ini hanya menampilkan bahwa pembayaran sedang diverifikasi dan tidak memercayai parameter URL atau mengubah status payment.
+
+Endpoint Laravel penerima callback tetap `POST /api/v1/webhooks/dana`, tetapi path yang disertakan pada string-to-sign Finish Notify secara default adalah `/v1.0/debit/notify`. SNAP signature mencakup relative path. Jika kontrak DANA merchant Anda secara eksplisit menetapkan path berbeda, gunakan `DANA_WEBHOOK_RELATIVE_PATH` sebagai override dan uji signature sebelum UAT.
 
 ## Pengujian
 
