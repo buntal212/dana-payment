@@ -3,14 +3,36 @@
 namespace Tests\Feature;
 
 use App\Models\Merchant;
+use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
+use App\Services\DanaSnapSignatureService;
 use App\Services\MerchantApiKeyService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class MerchantPaymentApiTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->app->instance(DanaSnapSignatureService::class, new class extends DanaSnapSignatureService
+        {
+            public function signTransactional(string $method, string $relativePath, string $minifiedJsonBody, string $timestamp, string $privateKey): string
+            {
+                return 'test-signature';
+            }
+        });
+        Http::fake([
+            'https://api.sandbox.dana.id/*' => Http::response([
+                'responseCode' => '2005400',
+                'referenceNo' => 'DANA-TEST-ORDER',
+                'webRedirectUrl' => 'https://checkout.sandbox.dana.id/test',
+            ]),
+        ]);
+    }
 
     public function test_merchant_with_a_valid_api_key_can_create_a_pending_payment(): void
     {
@@ -98,6 +120,20 @@ class MerchantPaymentApiTest extends TestCase
         unset($merchantAttributes['expires_at']);
 
         $merchant = Merchant::factory()->create($merchantAttributes);
+        MerchantPaymentConfig::factory()->for($merchant)->create([
+            'partner_id' => 'partner-test',
+            'callback_url' => 'https://merchant.example/return',
+            'enabled' => true,
+            'encrypted_credentials' => [
+                'merchant_id' => 'merchant-test',
+                'private_key' => 'test-private-key',
+                'dana_public_key' => 'test-public-key',
+                'origin' => 'merchant.example',
+                'channel_id' => '95221',
+                'notification_url' => 'https://merchant.example/api/v1/webhooks/dana',
+                'mcc' => '5814',
+            ],
+        ]);
         $result = app(MerchantApiKeyService::class)->create($merchant, 'feature-test', $expiresAt, ['payments:*']);
 
         return [$merchant, $result['api_key']];

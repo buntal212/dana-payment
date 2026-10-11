@@ -7,9 +7,11 @@ use App\Http\Requests\Api\V1\StorePaymentRequest;
 use App\Http\Resources\PaymentResource;
 use App\Models\Merchant;
 use App\Models\Payment;
+use App\Services\PaymentGatewayInterface;
 use App\Services\PaymentService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 class PaymentController extends Controller
 {
@@ -32,9 +34,19 @@ class PaymentController extends Controller
         return PaymentResource::collection($payments);
     }
 
-    public function store(StorePaymentRequest $request, PaymentService $paymentService): PaymentResource
+    public function store(StorePaymentRequest $request, PaymentService $paymentService, PaymentGatewayInterface $gateway): PaymentResource
     {
-        return new PaymentResource($paymentService->createPending($this->merchant($request), $request->validated()));
+        try {
+            $payment = $paymentService->createHostedCheckout($this->merchant($request), $request->validated(), $gateway);
+        } catch (HttpExceptionInterface $exception) {
+            throw $exception;
+        } catch (\LogicException $exception) {
+            abort(422, 'Konfigurasi checkout merchant belum lengkap.');
+        } catch (\RuntimeException $exception) {
+            abort(503, 'Checkout sementara tidak tersedia.');
+        }
+
+        return new PaymentResource($payment);
     }
 
     public function show(Request $request, string $id): PaymentResource

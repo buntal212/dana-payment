@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Merchant;
+use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
 use App\Models\PaymentEvent;
 use Illuminate\Database\QueryException;
@@ -69,6 +70,55 @@ class PaymentService
 
             throw new ConflictHttpException('merchant_order_id atau Idempotency-Key sudah digunakan.');
         }
+    }
+
+    /** @param array{merchant_order_id: string, amount_minor: int, currency: string, metadata?: array<string, mixed>, idempotency_key: string} $attributes */
+    public function createHostedCheckout(Merchant $merchant, array $attributes, PaymentGatewayInterface $gateway): Payment
+    {
+        $payment = $this->createPending($merchant, $attributes);
+
+        if ($payment->checkout_url !== null) {
+            return $payment;
+        }
+
+        $config = MerchantPaymentConfig::query()
+            ->where('merchant_id', $merchant->getKey())
+            ->where('provider', 'dana')
+            ->where('environment', 'sandbox')
+            ->where('enabled', true)
+            ->first();
+
+        if ($config === null) {
+            throw new \LogicException('Konfigurasi DANA Sandbox belum tersedia untuk merchant ini.');
+        }
+
+        $checkout = $gateway->startCheckout($payment, $config);
+
+        return DB::transaction(function () use ($checkout, $merchant, $payment): Payment {
+            $lockedPayment = Payment::query()->forMerchant($merchant)->lockForUpdate()->findOrFail($payment->getKey());
+
+            if ($lockedPayment->checkout_url !== null) {
+                return $lockedPayment;
+            }
+
+            $lockedPayment->update([
+                'provider_order_id' => $checkout['provider_order_id'],
+                'checkout_url' => $checkout['checkout_url'],
+                'expires_at' => $checkout['expires_at'],
+            ]);
+
+            PaymentEvent::query()->create([
+                'merchant_id' => $merchant->getKey(),
+                'payment_id' => $lockedPayment->getKey(),
+                'event_type' => 'payment.checkout_created',
+                'old_status' => 'pending',
+                'new_status' => 'pending',
+                'source' => 'provider',
+                'safe_details' => ['provider' => 'dana', 'provider_order_id' => $checkout['provider_order_id']],
+            ]);
+
+            return $lockedPayment->refresh();
+        });
     }
 
     /** @param array{merchant_order_id: string, amount_minor: int, currency: string, metadata?: array<string, mixed>} $attributes */

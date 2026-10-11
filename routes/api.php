@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\DanaWebhookController;
 use App\Http\Controllers\Api\V1\PaymentController;
 use Illuminate\Support\Facades\Route;
 
@@ -11,3 +12,6 @@ Route::prefix('v1')->middleware(['merchant:payments:read', 'throttle:merchant-ap
 
 Route::post('v1/payments', [PaymentController::class, 'store'])
     ->middleware(['merchant:payments:create', 'throttle:merchant-api']);
+
+Route::post('v1/webhooks/dana', DanaWebhookController::class)
+    ->middleware('throttle:60,1');
