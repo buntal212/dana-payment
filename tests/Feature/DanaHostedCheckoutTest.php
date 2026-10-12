@@ -11,6 +11,7 @@ use App\Services\MerchantApiKeyService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -18,30 +19,31 @@ class DanaHostedCheckoutTest extends TestCase
 {
     use RefreshDatabase;
 
+    private RecordingDanaSnapSignatureService $signatureService;
+
     protected function setUp(): void
     {
         parent::setUp();
-        $this->app->instance(DanaSnapSignatureService::class, new class extends DanaSnapSignatureService
-        {
-            public function signTransactional(string $method, string $relativePath, string $minifiedJsonBody, string $timestamp, string $privateKey): string
-            {
-                return 'valid-signature';
-            }
-
-            public function verifyTransactional(string $method, string $relativePath, string $minifiedJsonBody, string $timestamp, string $signature, string $publicKey): bool
-            {
-                return $signature === 'valid-signature' && $publicKey === 'verified-dana-public-key';
-            }
-        });
+        $this->signatureService = new RecordingDanaSnapSignatureService;
+        $this->app->instance(DanaSnapSignatureService::class, $this->signatureService);
     }
 
     public function test_create_payment_sends_signed_create_order_and_returns_checkout_url(): void
     {
         [$merchant, $apiKey] = $this->merchantWithDanaConfig();
-        Http::fake(function (HttpRequest $request): array {
+        $sentBody = null;
+        Log::spy();
+        Http::fake(function (HttpRequest $request) use (&$sentBody): array {
+            $sentBody = $request->body();
+            $header = static fn (string $name): ?string => $request->header($name)[0] ?? null;
             $this->assertSame('POST', $request->method());
             $this->assertSame('https://api.sandbox.dana.id/payment-gateway/v1.0/debit/payment-host-to-host.htm', $request->url());
-            $this->assertNotEmpty($request->header('X-SIGNATURE'));
+            $this->assertNotEmpty($header('X-SIGNATURE'));
+            $this->assertStringStartsWith('application/json', (string) $header('Content-Type'));
+            $this->assertSame('partner-dana-001', $header('X-PARTNER-ID'));
+            $this->assertSame('95221', $header('CHANNEL-ID'));
+            $this->assertSame('merchant.example', $header('ORIGIN'));
+            $this->assertNotEmpty($header('X-EXTERNAL-ID'));
             $this->assertSame('merchant-dana-001', $request->data()['merchantId']);
             $this->assertSame(['value' => '10000.00', 'currency' => 'IDR'], $request->data()['amount']);
 
@@ -56,8 +58,40 @@ class DanaHostedCheckoutTest extends TestCase
             ->assertSuccessful()
             ->assertJsonPath('data.checkout_url', 'https://checkout.sandbox.dana.id/session/001');
 
+        $this->assertIsString($sentBody);
+        $this->assertSame($sentBody, $this->signatureService->lastSignatureInput['json_body']);
+        $this->assertSame('POST', $this->signatureService->lastSignatureInput['method']);
+        $this->assertSame('/payment-gateway/v1.0/debit/payment-host-to-host.htm', $this->signatureService->lastSignatureInput['relative_path']);
+        $this->assertStringNotContainsString('\\/', $sentBody);
         $this->assertDatabaseHas('payments', ['merchant_id' => $merchant->id, 'provider_order_id' => 'DANA-ORDER-001', 'status' => 'pending']);
+        Log::shouldHaveReceived('debug')->withArgs(function (string $message, array $context): bool {
+            return $message === 'Diagnostik signature DANA Create Order.'
+                && ! array_key_exists('private_key', $context)
+                && ! array_key_exists('signature', $context)
+                && ! array_key_exists('body', $context)
+                && ! in_array('test-private-key', $context, true);
+        })->once();
         Http::assertSentCount(1);
+    }
+
+    public function test_invalid_signature_response_from_dana_does_not_create_a_checkout_or_mark_payment_paid(): void
+    {
+        [$merchant, $apiKey] = $this->merchantWithDanaConfig();
+        Http::fake([
+            'https://api.sandbox.dana.id/*' => Http::response([
+                'responseCode' => '4015400',
+                'responseMessage' => 'Unauthorized. Invalid Signature.',
+            ], 401, ['X-Request-ID' => 'dana-request-001']),
+        ]);
+
+        $this->withToken($apiKey)->postJson('/api/v1/payments', [
+            'merchant_order_id' => 'order-dana-invalid-signature',
+            'amount_minor' => 10_000,
+            'currency' => 'IDR',
+        ], ['Idempotency-Key' => 'dana-checkout-invalid-signature'])
+            ->assertStatus(503);
+
+        $this->assertDatabaseHas('payments', ['merchant_id' => $merchant->id, 'merchant_order_id' => 'order-dana-invalid-signature', 'status' => 'pending', 'provider_order_id' => null, 'checkout_url' => null]);
     }
 
     public function test_finish_notify_signature_uses_official_path_by_default(): void
@@ -206,5 +240,33 @@ class DanaHostedCheckoutTest extends TestCase
             'HTTP_X_SIGNATURE' => $signature,
             'HTTP_X_PARTNER_ID' => 'partner-dana-001',
         ], $body);
+    }
+}
+
+class RecordingDanaSnapSignatureService extends DanaSnapSignatureService
+{
+    /** @var array{method: string, relative_path: string, json_body: string, timestamp: string}|null */
+    public ?array $lastSignatureInput = null;
+
+    public function signTransactional(string $method, string $relativePath, string $jsonBody, string $timestamp, string $privateKey): string
+    {
+        $this->lastSignatureInput = [
+            'method' => $method,
+            'relative_path' => $relativePath,
+            'json_body' => $jsonBody,
+            'timestamp' => $timestamp,
+        ];
+
+        return 'valid-signature';
+    }
+
+    public function verifyTransactional(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey): bool
+    {
+        return $signature === 'valid-signature' && $publicKey === 'verified-dana-public-key';
+    }
+
+    public function verifyWithSigningPrivateKey(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $privateKey): bool
+    {
+        return $signature === 'valid-signature' && $privateKey === 'test-private-key';
     }
 }

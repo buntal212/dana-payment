@@ -43,7 +43,10 @@ DANA_SANDBOX_BASE_URL=https://api.sandbox.dana.id
 DANA_TIMEOUT=8
 DANA_CONNECT_TIMEOUT=3
 DANA_WEBHOOK_RELATIVE_PATH=/v1.0/debit/notify
+DANA_DIAGNOSTICS=false
 ```
+
+`DANA_DIAGNOSTICS` hanya diperlukan saat investigasi sandbox dan harus tetap `false` di production. Diagnostik otomatis aktif di `local`/`testing`, lalu mencatat ID payment, path relatif, ukuran body, SHA-256 body kanonis, panjang signature, hasil verifikasi lokal, HTTP status, response code, dan request ID DANA bila tersedia. Body mentah, signature, private key, dan credential tidak dicatat.
 
 ## Alur
 
@@ -66,6 +69,8 @@ php artisan test tests/Feature/DanaHostedCheckoutTest.php --compact
 ```
 
 Test memakai `Http::fake()` dan signature service tiruan; tidak ada request yang dikirim ke Sandbox. Setelah credential dan callback dikonfigurasi di lingkungan Sandbox, lakukan UAT melalui Merchant Portal DANA dan gunakan `webRedirectUrl` dari respons payment untuk mensimulasikan pembayaran.
+
+Jika DANA membalas `4015400`, pastikan body yang dikirim identik dengan body yang di-hash: aplikasi memakai JSON kanonis dengan slash dan Unicode tidak di-escape serta formula SNAP `HTTP_METHOD:RELATIVE_PATH:SHA256(Minify(HTTP_BODY)):X-TIMESTAMP`. Periksa juga timestamp `+07:00`, relative path Create Order `/payment-gateway/v1.0/debit/payment-host-to-host.htm`, key ID merchant Sandbox, dan aktivasi partner/channel oleh DANA. Jangan mengganti atau mencatat private key untuk diagnosis.
 
 Sebelum deployment, jalankan pengujian feature dan pastikan worker database produksi memakai MySQL/InnoDB agar `lockForUpdate()` memberi serialisasi callback lintas proses:
 

@@ -40,6 +40,7 @@ return [
         'timeout' => env('DANA_TIMEOUT', 8),
         'connect_timeout' => env('DANA_CONNECT_TIMEOUT', 3),
         'webhook_relative_path' => env('DANA_WEBHOOK_RELATIVE_PATH', '/v1.0/debit/notify'),
+        'diagnostics' => env('DANA_DIAGNOSTICS', false),
     ],
 
 ];

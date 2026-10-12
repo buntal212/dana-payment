@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -40,8 +41,12 @@ class DanaPaymentGateway implements PaymentGatewayInterface
                 'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
             ],
         ];
-        $body = json_encode($payload, JSON_THROW_ON_ERROR);
+        // DANA menghitung hash dari body JSON yang diminify. Kirim representasi
+        // kanonis yang sama dengan yang ditandatangani agar tidak ada perbedaan
+        // escape slash/Unicode antara HTTP body dan string-to-sign.
+        $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $signature = $this->signatureService->signTransactional('POST', self::CREATE_ORDER_PATH, $body, $timestamp, $credentials->privateKey);
+        $this->logRequestDiagnostics($payment, $body, $timestamp, $signature, $credentials->privateKey);
 
         try {
             $response = Http::acceptJson()
@@ -64,6 +69,8 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         }
 
         $responseBody = $response->json();
+        $this->logResponseDiagnostics($payment, $response, $responseBody);
+
         if (! $response->successful() || ! is_array($responseBody) || ($responseBody['responseCode'] ?? null) !== '2005400' || ! is_string($responseBody['referenceNo'] ?? null) || ! is_string($responseBody['webRedirectUrl'] ?? null)) {
             Log::warning('DANA Create Order ditolak atau merespons tidak lengkap.', [
                 'payment_id' => $payment->getKey(),
@@ -72,17 +79,60 @@ class DanaPaymentGateway implements PaymentGatewayInterface
                 'response_code' => is_array($responseBody)
                     ? ($responseBody['responseCode'] ?? null)
                     : null,
-                'response_message' => is_array($responseBody)
-                    ? ($responseBody['responseMessage'] ?? null)
-                    : null,
-                'debug_message' => is_array($responseBody)
-                    ? ($responseBody['additionalInfo']['debugMessage'] ?? null)
-                    : null,
+                'request_id' => $response->header('X-Request-ID') ?? $response->header('Request-Id'),
             ]);
 
             throw new RuntimeException('Checkout DANA belum dapat dibuat.');
         }
 
         return ['provider_order_id' => $responseBody['referenceNo'], 'checkout_url' => $responseBody['webRedirectUrl'], 'expires_at' => $expiresAt];
+    }
+
+    private function logRequestDiagnostics(Payment $payment, string $body, string $timestamp, string $signature, string $privateKey): void
+    {
+        if (! $this->diagnosticsEnabled()) {
+            return;
+        }
+
+        Log::debug('Diagnostik signature DANA Create Order.', [
+            'payment_id' => $payment->getKey(),
+            'merchant_id' => $payment->merchant_id,
+            'payment_reference' => $payment->public_id,
+            'method' => 'POST',
+            'relative_path' => self::CREATE_ORDER_PATH,
+            'body_bytes' => strlen($body),
+            'canonical_body_sha256' => hash('sha256', $this->signatureService->minifyJson($body)),
+            'timestamp' => $timestamp,
+            'signature_bytes' => strlen($signature),
+            'signature_verified_locally' => $this->signatureService->verifyWithSigningPrivateKey(
+                'POST',
+                self::CREATE_ORDER_PATH,
+                $body,
+                $timestamp,
+                $signature,
+                $privateKey,
+            ),
+        ]);
+    }
+
+    private function diagnosticsEnabled(): bool
+    {
+        return app()->environment(['local', 'testing'])
+            || filter_var(config('services.dana.diagnostics', false), FILTER_VALIDATE_BOOL);
+    }
+
+    private function logResponseDiagnostics(Payment $payment, Response $response, mixed $responseBody): void
+    {
+        if (! $this->diagnosticsEnabled()) {
+            return;
+        }
+
+        Log::debug('Diagnostik respons DANA Create Order.', [
+            'payment_id' => $payment->getKey(),
+            'merchant_id' => $payment->merchant_id,
+            'http_status' => $response->status(),
+            'response_code' => is_array($responseBody) ? ($responseBody['responseCode'] ?? null) : null,
+            'request_id' => $response->header('X-Request-ID') ?? $response->header('Request-Id'),
+        ]);
     }
 }
