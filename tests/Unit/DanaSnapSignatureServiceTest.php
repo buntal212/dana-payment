@@ -61,23 +61,31 @@ PEM;
         $timestamp = '2026-10-12T10:11:12+07:00';
         $path = '/payment-gateway/v1.0/debit/payment-host-to-host.htm';
 
-        $this->assertSame([
-            'signature_valid' => true,
-            'signature_base64_valid' => true,
-            'public_key_valid' => true,
-            'openssl_verification_completed' => true,
-        ], $service->transactionalVerificationDiagnostics('POST', $path, $body, $timestamp, self::TEST_SIGNATURE, self::TEST_PUBLIC_KEY));
-        $this->assertSame([
-            'signature_valid' => false,
-            'signature_base64_valid' => false,
-            'public_key_valid' => true,
-            'openssl_verification_completed' => false,
-        ], $service->transactionalVerificationDiagnostics('POST', $path, $body, $timestamp, 'not-base64!', self::TEST_PUBLIC_KEY));
-        $this->assertSame([
-            'signature_valid' => false,
-            'signature_base64_valid' => true,
-            'public_key_valid' => false,
-            'openssl_verification_completed' => false,
-        ], $service->transactionalVerificationDiagnostics('POST', $path, $body, $timestamp, self::TEST_SIGNATURE, 'not-a-pem'));
+        $valid = $service->transactionalVerificationDiagnostics('POST', $path, $body, $timestamp, self::TEST_SIGNATURE, self::TEST_PUBLIC_KEY);
+        $this->assertTrue($valid['signature_valid']);
+        $this->assertTrue($valid['signature_base64_valid']);
+        $this->assertSame(256, $valid['signature_decoded_bytes']);
+        $this->assertTrue($valid['public_key_valid']);
+        $this->assertSame(2048, $valid['public_key_bits']);
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', (string) $valid['public_key_sha256']);
+        $this->assertTrue($valid['public_key_is_rsa']);
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $valid['string_to_sign_sha256']);
+        $this->assertSame(1, $valid['openssl_verify_result']);
+        $this->assertTrue($valid['openssl_verification_completed']);
+
+        $invalidBase64 = $service->transactionalVerificationDiagnostics('POST', $path, $body, $timestamp, 'not-base64!', self::TEST_PUBLIC_KEY);
+        $this->assertFalse($invalidBase64['signature_valid']);
+        $this->assertFalse($invalidBase64['signature_base64_valid']);
+        $this->assertNull($invalidBase64['signature_decoded_bytes']);
+        $this->assertTrue($invalidBase64['public_key_valid']);
+        $this->assertNull($invalidBase64['openssl_verify_result']);
+
+        $invalidPublicKey = $service->transactionalVerificationDiagnostics('POST', $path, $body, $timestamp, self::TEST_SIGNATURE, 'not-a-pem');
+        $this->assertFalse($invalidPublicKey['signature_valid']);
+        $this->assertTrue($invalidPublicKey['signature_base64_valid']);
+        $this->assertFalse($invalidPublicKey['public_key_valid']);
+        $this->assertNull($invalidPublicKey['public_key_bits']);
+        $this->assertNull($invalidPublicKey['public_key_sha256']);
+        $this->assertNull($invalidPublicKey['openssl_verify_result']);
     }
 }

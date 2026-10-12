@@ -123,7 +123,7 @@ class DanaHostedCheckoutTest extends TestCase
 
         $this->postWebhook($this->finishNotifyPayload($payment, '00'), headers: ['timestamp' => '2026-10-11T10:01:00Z'])->assertBadRequest();
 
-        $this->assertWebhookAuthenticationDiagnostics($payment, false, true, true, true);
+        $this->assertWebhookAuthenticationDiagnostics($payment, false, true, true, true, '2026-10-11T10:01:00Z');
         $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
     }
 
@@ -294,18 +294,25 @@ class DanaHostedCheckoutTest extends TestCase
         ], $body);
     }
 
-    private function assertWebhookAuthenticationDiagnostics(Payment $payment, bool $timestampValid, bool $partnerIdValid, bool $merchantIdValid, bool $signatureValid): void
+    private function assertWebhookAuthenticationDiagnostics(Payment $payment, bool $timestampValid, bool $partnerIdValid, bool $merchantIdValid, bool $signatureValid, string $receivedTimestamp = '2026-10-11T10:01:00+07:00'): void
     {
-        Log::shouldHaveReceived('warning')->withArgs(function (string $message, array $context) use ($payment, $timestampValid, $partnerIdValid, $merchantIdValid, $signatureValid): bool {
+        Log::shouldHaveReceived('warning')->withArgs(function (string $message, array $context) use ($payment, $timestampValid, $partnerIdValid, $merchantIdValid, $signatureValid, $receivedTimestamp): bool {
             return $message === 'Webhook DANA gagal validasi autentikasi.'
                 && $context['payment_id'] === $payment->getKey()
                 && $context['payment_merchant_id'] === $payment->merchant_id
+                && $context['received_timestamp'] === $receivedTimestamp
                 && $context['timestamp_valid'] === $timestampValid
                 && $context['partner_id_valid'] === $partnerIdValid
                 && $context['merchant_id_valid'] === $merchantIdValid
                 && $context['signature_valid'] === $signatureValid
                 && $context['signature_base64_valid'] === true
+                && $context['signature_decoded_bytes'] === 256
                 && $context['public_key_valid'] === true
+                && $context['public_key_bits'] === 2048
+                && preg_match('/^[a-f0-9]{64}$/', $context['public_key_sha256']) === 1
+                && $context['public_key_is_rsa'] === true
+                && preg_match('/^[a-f0-9]{64}$/', $context['string_to_sign_sha256']) === 1
+                && $context['openssl_verify_result'] === ($signatureValid ? 1 : 0)
                 && $context['openssl_verification_completed'] === true
                 && $context['relative_path'] === '/v1.0/debit/notify'
                 && is_int($context['raw_body_bytes'])
@@ -313,6 +320,7 @@ class DanaHostedCheckoutTest extends TestCase
                 && is_int($context['canonical_body_bytes'])
                 && preg_match('/^[a-f0-9]{64}$/', $context['canonical_body_sha256']) === 1
                 && is_bool($context['body_is_canonical'])
+                && $context['body_changed_by_canonicalization'] === ! $context['body_is_canonical']
                 && ! array_key_exists('raw_body', $context)
                 && ! array_key_exists('signature', $context)
                 && ! array_key_exists('private_key', $context)
@@ -347,11 +355,18 @@ class RecordingDanaSnapSignatureService extends DanaSnapSignatureService
     {
         $signatureBase64Valid = $signature === 'valid-signature' || base64_decode($signature, true) !== false;
         $publicKeyValid = $publicKey === 'verified-dana-public-key';
+        $signatureValid = $signature === 'valid-signature' && $publicKeyValid;
 
         return [
-            'signature_valid' => $signature === 'valid-signature' && $publicKeyValid,
+            'signature_valid' => $signatureValid,
             'signature_base64_valid' => $signatureBase64Valid,
+            'signature_decoded_bytes' => 256,
             'public_key_valid' => $publicKeyValid,
+            'public_key_bits' => $publicKeyValid ? 2048 : null,
+            'public_key_sha256' => $publicKeyValid ? str_repeat('a', 64) : null,
+            'public_key_is_rsa' => $publicKeyValid,
+            'string_to_sign_sha256' => str_repeat('b', 64),
+            'openssl_verify_result' => $publicKeyValid ? ($signatureValid ? 1 : 0) : null,
             'openssl_verification_completed' => $publicKeyValid,
         ];
     }

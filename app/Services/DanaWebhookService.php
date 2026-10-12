@@ -84,13 +84,19 @@ class DanaWebhookService
             : [
                 'signature_valid' => false,
                 'signature_base64_valid' => false,
+                'signature_decoded_bytes' => null,
                 'public_key_valid' => false,
+                'public_key_bits' => null,
+                'public_key_sha256' => null,
+                'public_key_is_rsa' => false,
+                'string_to_sign_sha256' => null,
+                'openssl_verify_result' => null,
                 'openssl_verification_completed' => false,
             ];
         $signatureValid = $signatureDiagnostics['signature_valid'];
 
         if (! $timestampValid || ! $partnerIdValid || ! $merchantIdValid || ! $signatureValid) {
-            $this->logAuthenticationDiagnostics($payment, $timestampValid, $partnerIdValid, $merchantIdValid, $signatureDiagnostics, $rawBody, $canonicalBody);
+            $this->logAuthenticationDiagnostics($payment, $timestamp, $timestampValid, $partnerIdValid, $merchantIdValid, $signatureDiagnostics, $rawBody, $canonicalBody);
             $this->recordRejected($payment, $rawBody, 'signature_or_identity_invalid');
 
             throw new RuntimeException('Webhook DANA tidak valid.');
@@ -215,12 +221,13 @@ class DanaWebhookService
         Log::warning('Webhook DANA ditolak.', ['payment_id' => $payment?->getKey(), 'error_code' => $errorCode]);
     }
 
-    /** @param array{signature_valid: bool, signature_base64_valid: bool, public_key_valid: bool, openssl_verification_completed: bool} $signatureDiagnostics */
-    private function logAuthenticationDiagnostics(Payment $payment, bool $timestampValid, bool $partnerIdValid, bool $merchantIdValid, array $signatureDiagnostics, string $rawBody, string $canonicalBody): void
+    /** @param array{signature_valid: bool, signature_base64_valid: bool, signature_decoded_bytes: int|null, public_key_valid: bool, public_key_bits: int|null, public_key_sha256: string|null, public_key_is_rsa: bool, string_to_sign_sha256: string|null, openssl_verify_result: int|null, openssl_verification_completed: bool} $signatureDiagnostics */
+    private function logAuthenticationDiagnostics(Payment $payment, ?string $timestamp, bool $timestampValid, bool $partnerIdValid, bool $merchantIdValid, array $signatureDiagnostics, string $rawBody, string $canonicalBody): void
     {
         Log::warning('Webhook DANA gagal validasi autentikasi.', [
             'payment_id' => $payment->getKey(),
             'payment_merchant_id' => $payment->merchant_id,
+            'received_timestamp' => $timestamp,
             'timestamp_valid' => $timestampValid,
             'partner_id_valid' => $partnerIdValid,
             'merchant_id_valid' => $merchantIdValid,
@@ -231,6 +238,7 @@ class DanaWebhookService
             'canonical_body_bytes' => strlen($canonicalBody),
             'canonical_body_sha256' => hash('sha256', $canonicalBody),
             'body_is_canonical' => hash_equals($rawBody, $canonicalBody),
+            'body_changed_by_canonicalization' => ! hash_equals($rawBody, $canonicalBody),
         ]);
     }
 
