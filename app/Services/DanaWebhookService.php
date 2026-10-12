@@ -68,13 +68,22 @@ class DanaWebhookService
         $partnerId = $headers['x-partner-id'] ?? null;
         $merchantId = $payload['merchantId'] ?? null;
 
-        if (! is_string($timestamp)
-            || ! $this->isJakartaTimestamp($timestamp)
-            || ! is_string($signature)
-            || ! is_string($merchantId)
-            || ! hash_equals($credentials->partnerId, (string) $partnerId)
-            || ! hash_equals($credentials->merchantId, $merchantId)
-            || ! $this->signatureService->verifyTransactional('POST', (string) config('services.dana.webhook_relative_path'), $minifiedBody, $timestamp, $signature, $credentials->danaPublicKey)) {
+        $timestampValid = is_string($timestamp) && $this->isJakartaTimestamp($timestamp);
+        $partnerIdValid = is_string($partnerId) && hash_equals($credentials->partnerId, $partnerId);
+        $merchantIdValid = is_string($merchantId) && hash_equals($credentials->merchantId, $merchantId);
+        $signatureValid = is_string($timestamp)
+            && is_string($signature)
+            && $this->signatureService->verifyTransactional(
+                'POST',
+                (string) config('services.dana.webhook_relative_path'),
+                $minifiedBody,
+                $timestamp,
+                $signature,
+                $credentials->danaPublicKey,
+            );
+
+        if (! $timestampValid || ! $partnerIdValid || ! $merchantIdValid || ! $signatureValid) {
+            $this->logAuthenticationDiagnostics($payment, $timestampValid, $partnerIdValid, $merchantIdValid, $signatureValid);
             $this->recordRejected($payment, $rawBody, 'signature_or_identity_invalid');
 
             throw new RuntimeException('Webhook DANA tidak valid.');
@@ -197,6 +206,18 @@ class DanaWebhookService
         ]);
 
         Log::warning('Webhook DANA ditolak.', ['payment_id' => $payment?->getKey(), 'error_code' => $errorCode]);
+    }
+
+    private function logAuthenticationDiagnostics(Payment $payment, bool $timestampValid, bool $partnerIdValid, bool $merchantIdValid, bool $signatureValid): void
+    {
+        Log::warning('Webhook DANA gagal validasi autentikasi.', [
+            'payment_id' => $payment->getKey(),
+            'payment_merchant_id' => $payment->merchant_id,
+            'timestamp_valid' => $timestampValid,
+            'partner_id_valid' => $partnerIdValid,
+            'merchant_id_valid' => $merchantIdValid,
+            'signature_valid' => $signatureValid,
+        ]);
     }
 
     private function isJakartaTimestamp(string $timestamp): bool

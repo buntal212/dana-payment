@@ -104,6 +104,7 @@ class DanaHostedCheckoutTest extends TestCase
         [$merchant] = $this->merchantWithDanaConfig();
         $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-002', 'amount_minor' => 25_000]);
         $payload = $this->finishNotifyPayload($payment, '00');
+        Log::spy();
 
         $this->postWebhook($payload)->assertOk()->assertJsonPath('responseCode', '2005600');
         $this->postWebhook($payload)->assertOk()->assertJsonPath('responseCode', '2005600');
@@ -111,6 +112,57 @@ class DanaHostedCheckoutTest extends TestCase
         $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'paid']);
         $this->assertDatabaseCount('payment_webhooks', 1);
         $this->assertDatabaseCount('payment_events', 1);
+        Log::shouldNotHaveReceived('warning');
+    }
+
+    public function test_webhook_with_invalid_timestamp_is_rejected_and_reports_only_timestamp_failure(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-TIMESTAMP']);
+        Log::spy();
+
+        $this->postWebhook($this->finishNotifyPayload($payment, '00'), headers: ['timestamp' => '2026-10-11T10:01:00Z'])->assertBadRequest();
+
+        $this->assertWebhookAuthenticationDiagnostics($payment, false, true, true, true);
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
+    }
+
+    public function test_webhook_with_invalid_partner_id_is_rejected_and_reports_only_partner_failure(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-PARTNER']);
+        Log::spy();
+
+        $this->postWebhook($this->finishNotifyPayload($payment, '00'), headers: ['partner_id' => 'partner-dana-foreign'])->assertBadRequest();
+
+        $this->assertWebhookAuthenticationDiagnostics($payment, true, false, true, true);
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
+    }
+
+    public function test_webhook_with_invalid_merchant_id_is_rejected_and_reports_only_merchant_failure(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-MERCHANT']);
+        $payload = $this->finishNotifyPayload($payment, '00');
+        $payload['merchantId'] = 'merchant-dana-foreign';
+        Log::spy();
+
+        $this->postWebhook($payload)->assertBadRequest();
+
+        $this->assertWebhookAuthenticationDiagnostics($payment, true, true, false, true);
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
+    }
+
+    public function test_webhook_with_invalid_signature_is_rejected_and_reports_only_signature_failure(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-SIGNATURE']);
+        Log::spy();
+
+        $this->postWebhook($this->finishNotifyPayload($payment, '00'), 'invalid-signature')->assertBadRequest();
+
+        $this->assertWebhookAuthenticationDiagnostics($payment, true, true, true, false);
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
     }
 
     public function test_invalid_signature_or_mismatched_amount_is_rejected_without_changing_payment_status(): void
@@ -228,18 +280,33 @@ class DanaHostedCheckoutTest extends TestCase
     }
 
     /** @param array<string, mixed> $payload */
-    private function postWebhook(array $payload, ?string $signature = null): TestResponse
+    private function postWebhook(array $payload, ?string $signature = null, array $headers = []): TestResponse
     {
         $body = json_encode($payload, JSON_THROW_ON_ERROR);
-        $timestamp = '2026-10-11T10:01:00+07:00';
+        $timestamp = $headers['timestamp'] ?? '2026-10-11T10:01:00+07:00';
         $signature ??= app(DanaSnapSignatureService::class)->signTransactional('POST', (string) config('services.dana.webhook_relative_path'), app(DanaSnapSignatureService::class)->minifyJson($body), $timestamp, 'test-private-key');
 
         return $this->call('POST', '/api/v1/webhooks/dana', [], [], [], [
             'CONTENT_TYPE' => 'application/json',
             'HTTP_X_TIMESTAMP' => $timestamp,
             'HTTP_X_SIGNATURE' => $signature,
-            'HTTP_X_PARTNER_ID' => 'partner-dana-001',
+            'HTTP_X_PARTNER_ID' => $headers['partner_id'] ?? 'partner-dana-001',
         ], $body);
+    }
+
+    private function assertWebhookAuthenticationDiagnostics(Payment $payment, bool $timestampValid, bool $partnerIdValid, bool $merchantIdValid, bool $signatureValid): void
+    {
+        Log::shouldHaveReceived('warning')->withArgs(function (string $message, array $context) use ($payment, $timestampValid, $partnerIdValid, $merchantIdValid, $signatureValid): bool {
+            return $message === 'Webhook DANA gagal validasi autentikasi.'
+                && $context === [
+                    'payment_id' => $payment->getKey(),
+                    'payment_merchant_id' => $payment->merchant_id,
+                    'timestamp_valid' => $timestampValid,
+                    'partner_id_valid' => $partnerIdValid,
+                    'merchant_id_valid' => $merchantIdValid,
+                    'signature_valid' => $signatureValid,
+                ];
+        })->once();
     }
 }
 
