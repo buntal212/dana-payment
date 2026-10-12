@@ -159,7 +159,7 @@ class DanaHostedCheckoutTest extends TestCase
         $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-SIGNATURE']);
         Log::spy();
 
-        $this->postWebhook($this->finishNotifyPayload($payment, '00'), 'invalid-signature')->assertBadRequest();
+        $this->postWebhook($this->finishNotifyPayload($payment, '00'), base64_encode('not-a-valid-rsa-signature'))->assertBadRequest();
 
         $this->assertWebhookAuthenticationDiagnostics($payment, true, true, true, false);
         $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
@@ -298,14 +298,25 @@ class DanaHostedCheckoutTest extends TestCase
     {
         Log::shouldHaveReceived('warning')->withArgs(function (string $message, array $context) use ($payment, $timestampValid, $partnerIdValid, $merchantIdValid, $signatureValid): bool {
             return $message === 'Webhook DANA gagal validasi autentikasi.'
-                && $context === [
-                    'payment_id' => $payment->getKey(),
-                    'payment_merchant_id' => $payment->merchant_id,
-                    'timestamp_valid' => $timestampValid,
-                    'partner_id_valid' => $partnerIdValid,
-                    'merchant_id_valid' => $merchantIdValid,
-                    'signature_valid' => $signatureValid,
-                ];
+                && $context['payment_id'] === $payment->getKey()
+                && $context['payment_merchant_id'] === $payment->merchant_id
+                && $context['timestamp_valid'] === $timestampValid
+                && $context['partner_id_valid'] === $partnerIdValid
+                && $context['merchant_id_valid'] === $merchantIdValid
+                && $context['signature_valid'] === $signatureValid
+                && $context['signature_base64_valid'] === true
+                && $context['public_key_valid'] === true
+                && $context['openssl_verification_completed'] === true
+                && $context['relative_path'] === '/v1.0/debit/notify'
+                && is_int($context['raw_body_bytes'])
+                && preg_match('/^[a-f0-9]{64}$/', $context['raw_body_sha256']) === 1
+                && is_int($context['canonical_body_bytes'])
+                && preg_match('/^[a-f0-9]{64}$/', $context['canonical_body_sha256']) === 1
+                && is_bool($context['body_is_canonical'])
+                && ! array_key_exists('raw_body', $context)
+                && ! array_key_exists('signature', $context)
+                && ! array_key_exists('private_key', $context)
+                && ! array_key_exists('public_key', $context);
         })->once();
     }
 }
@@ -330,6 +341,19 @@ class RecordingDanaSnapSignatureService extends DanaSnapSignatureService
     public function verifyTransactional(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey): bool
     {
         return $signature === 'valid-signature' && $publicKey === 'verified-dana-public-key';
+    }
+
+    public function transactionalVerificationDiagnostics(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey): array
+    {
+        $signatureBase64Valid = $signature === 'valid-signature' || base64_decode($signature, true) !== false;
+        $publicKeyValid = $publicKey === 'verified-dana-public-key';
+
+        return [
+            'signature_valid' => $signature === 'valid-signature' && $publicKeyValid,
+            'signature_base64_valid' => $signatureBase64Valid,
+            'public_key_valid' => $publicKeyValid,
+            'openssl_verification_completed' => $publicKeyValid,
+        ];
     }
 
     public function verifyWithSigningPrivateKey(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $privateKey): bool

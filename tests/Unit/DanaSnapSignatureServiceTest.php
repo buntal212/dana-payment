@@ -53,4 +53,31 @@ PEM;
         $this->assertFalse($service->verifyTransactional('POST', '/v1.0/debit/notify', $body, $timestamp, self::TEST_SIGNATURE, self::TEST_PUBLIC_KEY));
         $this->assertFalse($service->verifyTransactional('POST', $path, $body, '2026-10-12T10:11:13+07:00', self::TEST_SIGNATURE, self::TEST_PUBLIC_KEY));
     }
+
+    public function test_verification_diagnostics_distinguish_base64_public_key_and_signature_failures(): void
+    {
+        $service = new DanaSnapSignatureService;
+        $body = '{"partnerReferenceNo":"payment-001","url":"https://merchant.example/payment/finish"}';
+        $timestamp = '2026-10-12T10:11:12+07:00';
+        $path = '/payment-gateway/v1.0/debit/payment-host-to-host.htm';
+
+        $this->assertSame([
+            'signature_valid' => true,
+            'signature_base64_valid' => true,
+            'public_key_valid' => true,
+            'openssl_verification_completed' => true,
+        ], $service->transactionalVerificationDiagnostics('POST', $path, $body, $timestamp, self::TEST_SIGNATURE, self::TEST_PUBLIC_KEY));
+        $this->assertSame([
+            'signature_valid' => false,
+            'signature_base64_valid' => false,
+            'public_key_valid' => true,
+            'openssl_verification_completed' => false,
+        ], $service->transactionalVerificationDiagnostics('POST', $path, $body, $timestamp, 'not-base64!', self::TEST_PUBLIC_KEY));
+        $this->assertSame([
+            'signature_valid' => false,
+            'signature_base64_valid' => true,
+            'public_key_valid' => false,
+            'openssl_verification_completed' => false,
+        ], $service->transactionalVerificationDiagnostics('POST', $path, $body, $timestamp, self::TEST_SIGNATURE, 'not-a-pem'));
+    }
 }

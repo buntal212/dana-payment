@@ -24,17 +24,33 @@ class DanaSnapSignatureService
 
     public function verifyTransactional(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey): bool
     {
+        return $this->transactionalVerificationDiagnostics($method, $relativePath, $jsonBody, $timestamp, $signature, $publicKey)['signature_valid'];
+    }
+
+    /**
+     * @return array{signature_valid: bool, signature_base64_valid: bool, public_key_valid: bool, openssl_verification_completed: bool}
+     */
+    public function transactionalVerificationDiagnostics(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey): array
+    {
         $decodedSignature = base64_decode($signature, true);
-        if ($decodedSignature === false) {
-            return false;
-        }
-
         $key = @openssl_pkey_get_public($publicKey);
-        if ($key === false) {
-            return false;
+        if ($decodedSignature === false || $key === false) {
+            return [
+                'signature_valid' => false,
+                'signature_base64_valid' => $decodedSignature !== false,
+                'public_key_valid' => $key !== false,
+                'openssl_verification_completed' => false,
+            ];
         }
 
-        return @openssl_verify($this->transactionalStringToSign($method, $relativePath, $jsonBody, $timestamp), $decodedSignature, $key, OPENSSL_ALGO_SHA256) === 1;
+        $verificationResult = @openssl_verify($this->transactionalStringToSign($method, $relativePath, $jsonBody, $timestamp), $decodedSignature, $key, OPENSSL_ALGO_SHA256);
+
+        return [
+            'signature_valid' => $verificationResult === 1,
+            'signature_base64_valid' => true,
+            'public_key_valid' => true,
+            'openssl_verification_completed' => $verificationResult !== -1,
+        ];
     }
 
     /**
