@@ -67,6 +67,13 @@ class DanaWebhookService
         $signature = $headers['x-signature'] ?? null;
         $partnerId = $headers['x-partner-id'] ?? null;
         $merchantId = $payload['merchantId'] ?? null;
+        $callbackPath = $headers['request-path'] ?? config('services.dana.webhook_relative_path');
+
+        if (! $this->isValidCallbackPath($callbackPath)) {
+            $this->recordRejected($payment, $rawBody, 'invalid_callback_path');
+
+            throw new RuntimeException('Webhook DANA tidak valid.');
+        }
 
         $timestampValid = is_string($timestamp) && $this->isJakartaTimestamp($timestamp);
         $partnerIdValid = is_string($partnerId) && hash_equals($credentials->partnerId, $partnerId);
@@ -75,7 +82,7 @@ class DanaWebhookService
             && is_string($signature)
             ? $this->signatureService->transactionalVerificationDiagnostics(
                 'POST',
-                (string) config('services.dana.webhook_relative_path'),
+                $callbackPath,
                 $rawBody,
                 $timestamp,
                 $signature,
@@ -96,7 +103,7 @@ class DanaWebhookService
         $signatureValid = $signatureDiagnostics['signature_valid'];
 
         if (! $timestampValid || ! $partnerIdValid || ! $merchantIdValid || ! $signatureValid) {
-            $this->logAuthenticationDiagnostics($payment, $timestamp, $timestampValid, $partnerIdValid, $merchantIdValid, $signatureDiagnostics, $rawBody, $canonicalBody);
+            $this->logAuthenticationDiagnostics($payment, $callbackPath, $timestamp, $timestampValid, $partnerIdValid, $merchantIdValid, $signatureDiagnostics, $rawBody, $canonicalBody);
             $this->recordRejected($payment, $rawBody, 'signature_or_identity_invalid');
 
             throw new RuntimeException('Webhook DANA tidak valid.');
@@ -222,7 +229,7 @@ class DanaWebhookService
     }
 
     /** @param array{signature_valid: bool, signature_base64_valid: bool, signature_decoded_bytes: int|null, public_key_valid: bool, public_key_bits: int|null, public_key_sha256: string|null, public_key_is_rsa: bool, string_to_sign_sha256: string|null, openssl_verify_result: int|null, openssl_verification_completed: bool} $signatureDiagnostics */
-    private function logAuthenticationDiagnostics(Payment $payment, ?string $timestamp, bool $timestampValid, bool $partnerIdValid, bool $merchantIdValid, array $signatureDiagnostics, string $rawBody, string $canonicalBody): void
+    private function logAuthenticationDiagnostics(Payment $payment, string $callbackPath, ?string $timestamp, bool $timestampValid, bool $partnerIdValid, bool $merchantIdValid, array $signatureDiagnostics, string $rawBody, string $canonicalBody): void
     {
         Log::warning('Webhook DANA gagal validasi autentikasi.', [
             'payment_id' => $payment->getKey(),
@@ -232,7 +239,7 @@ class DanaWebhookService
             'partner_id_valid' => $partnerIdValid,
             'merchant_id_valid' => $merchantIdValid,
             ...$signatureDiagnostics,
-            'relative_path' => (string) config('services.dana.webhook_relative_path'),
+            'relative_path' => $callbackPath,
             'raw_body_bytes' => strlen($rawBody),
             'raw_body_sha256' => hash('sha256', $rawBody),
             'canonical_body_bytes' => strlen($canonicalBody),
@@ -247,5 +254,14 @@ class DanaWebhookService
         $date = DateTimeImmutable::createFromFormat('Y-m-d\\TH:i:sP', $timestamp);
 
         return $date !== false && $date->format('Y-m-d\\TH:i:sP') === $timestamp && $date->format('P') === '+07:00';
+    }
+
+    private function isValidCallbackPath(mixed $path): bool
+    {
+        return is_string($path)
+            && str_starts_with($path, '/')
+            && ! str_contains($path, '?')
+            && ! str_contains($path, '#')
+            && ! str_contains($path, "\0");
     }
 }

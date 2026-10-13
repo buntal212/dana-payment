@@ -42,7 +42,7 @@ Konfigurasi aplikasi yang tidak rahasia tersedia melalui environment, tanpa meng
 DANA_SANDBOX_BASE_URL=https://api.sandbox.dana.id
 DANA_TIMEOUT=8
 DANA_CONNECT_TIMEOUT=3
-DANA_WEBHOOK_RELATIVE_PATH=/v1.0/debit/notify
+DANA_WEBHOOK_RELATIVE_PATH=/api/v1/webhooks/dana
 DANA_DIAGNOSTICS=false
 ```
 
@@ -60,7 +60,7 @@ Finish Notify divalidasi menggunakan public key DANA untuk konfigurasi merchant 
 
 Set `callback_url` merchant ke URL HTTPS halaman redirect aplikasi, misalnya `https://gateway.example/payment/finish`. Halaman ini hanya menampilkan bahwa pembayaran sedang diverifikasi dan tidak memercayai parameter URL atau mengubah status payment.
 
-Endpoint Laravel penerima callback tetap `POST /api/v1/webhooks/dana`, tetapi path yang disertakan pada string-to-sign Finish Notify secara default adalah `/v1.0/debit/notify`. SNAP signature mencakup relative path. Jika kontrak DANA merchant Anda secara eksplisit menetapkan path berbeda, gunakan `DANA_WEBHOOK_RELATIVE_PATH` sebagai override dan uji signature sebelum UAT.
+Endpoint Laravel penerima callback adalah `POST /api/v1/webhooks/dana`. Berdasarkan konfirmasi DANA Integration Support, signature Finish Notify menggunakan relative path endpoint callback merchant yang benar-benar diterima, yaitu `/api/v1/webhooks/dana`. Controller mengambil path request tanpa query string dan memprioritaskannya untuk string-to-sign; `DANA_WEBHOOK_RELATIVE_PATH` hanya fallback untuk pemanggilan service di luar request HTTP. Jangan gunakan `/v1.0/debit/notify` untuk callback ini.
 
 ## Pengujian
 

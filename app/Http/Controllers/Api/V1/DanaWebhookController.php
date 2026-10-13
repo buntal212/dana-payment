@@ -17,6 +17,10 @@ class DanaWebhookController extends Controller
                 'x-timestamp' => $request->header('X-TIMESTAMP'),
                 'x-signature' => $request->header('X-SIGNATURE'),
                 'x-partner-id' => $request->header('X-PARTNER-ID'),
+                // getPathInfo() berasal dari request URI yang diterima aplikasi,
+                // tidak menyertakan query string, dan tidak mempercayai header
+                // forwarding yang dapat dikirim oleh pemanggil webhook.
+                'request-path' => $request->getPathInfo(),
             ]);
         } catch (RuntimeException) {
             return response()->json(['message' => 'Webhook tidak valid.'], 400);

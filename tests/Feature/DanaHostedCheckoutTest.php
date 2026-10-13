@@ -19,6 +19,8 @@ class DanaHostedCheckoutTest extends TestCase
 {
     use RefreshDatabase;
 
+    private const DANA_CALLBACK_PATH = '/api/v1/webhooks/dana';
+
     private RecordingDanaSnapSignatureService $signatureService;
 
     protected function setUp(): void
@@ -94,9 +96,20 @@ class DanaHostedCheckoutTest extends TestCase
         $this->assertDatabaseHas('payments', ['merchant_id' => $merchant->id, 'merchant_order_id' => 'order-dana-invalid-signature', 'status' => 'pending', 'provider_order_id' => null, 'checkout_url' => null]);
     }
 
-    public function test_finish_notify_signature_uses_official_path_by_default(): void
+    public function test_finish_notify_signature_uses_actual_callback_path_by_default(): void
     {
-        $this->assertSame('/v1.0/debit/notify', config('services.dana.webhook_relative_path'));
+        $this->assertSame(self::DANA_CALLBACK_PATH, config('services.dana.webhook_relative_path'));
+    }
+
+    public function test_finish_notify_uses_received_callback_path_without_query_string_for_signature(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-CALLBACK-PATH']);
+
+        $this->postWebhook($this->finishNotifyPayload($payment, '00'), headers: ['request_uri' => self::DANA_CALLBACK_PATH.'?utm_source=dana'])->assertOk();
+
+        $this->assertSame(self::DANA_CALLBACK_PATH, $this->signatureService->lastVerificationInput['relative_path']);
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'paid']);
     }
 
     public function test_valid_finish_notify_marks_pending_payment_paid_and_duplicate_is_safe(): void
@@ -284,9 +297,10 @@ class DanaHostedCheckoutTest extends TestCase
     {
         $body = json_encode($payload, JSON_THROW_ON_ERROR);
         $timestamp = $headers['timestamp'] ?? '2026-10-11T10:01:00+07:00';
-        $signature ??= app(DanaSnapSignatureService::class)->signTransactional('POST', (string) config('services.dana.webhook_relative_path'), app(DanaSnapSignatureService::class)->minifyJson($body), $timestamp, 'test-private-key');
+        $callbackPath = $headers['signature_path'] ?? self::DANA_CALLBACK_PATH;
+        $signature ??= app(DanaSnapSignatureService::class)->signTransactional('POST', $callbackPath, app(DanaSnapSignatureService::class)->minifyJson($body), $timestamp, 'test-private-key');
 
-        return $this->call('POST', '/api/v1/webhooks/dana', [], [], [], [
+        return $this->call('POST', $headers['request_uri'] ?? self::DANA_CALLBACK_PATH, [], [], [], [
             'CONTENT_TYPE' => 'application/json',
             'HTTP_X_TIMESTAMP' => $timestamp,
             'HTTP_X_SIGNATURE' => $signature,
@@ -314,7 +328,7 @@ class DanaHostedCheckoutTest extends TestCase
                 && preg_match('/^[a-f0-9]{64}$/', $context['string_to_sign_sha256']) === 1
                 && $context['openssl_verify_result'] === ($signatureValid ? 1 : 0)
                 && $context['openssl_verification_completed'] === true
-                && $context['relative_path'] === '/v1.0/debit/notify'
+                && $context['relative_path'] === self::DANA_CALLBACK_PATH
                 && is_int($context['raw_body_bytes'])
                 && preg_match('/^[a-f0-9]{64}$/', $context['raw_body_sha256']) === 1
                 && is_int($context['canonical_body_bytes'])
@@ -333,6 +347,9 @@ class RecordingDanaSnapSignatureService extends DanaSnapSignatureService
 {
     /** @var array{method: string, relative_path: string, json_body: string, timestamp: string}|null */
     public ?array $lastSignatureInput = null;
+
+    /** @var array{method: string, relative_path: string, json_body: string, timestamp: string}|null */
+    public ?array $lastVerificationInput = null;
 
     public function signTransactional(string $method, string $relativePath, string $jsonBody, string $timestamp, string $privateKey): string
     {
@@ -353,6 +370,12 @@ class RecordingDanaSnapSignatureService extends DanaSnapSignatureService
 
     public function transactionalVerificationDiagnostics(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey): array
     {
+        $this->lastVerificationInput = [
+            'method' => $method,
+            'relative_path' => $relativePath,
+            'json_body' => $jsonBody,
+            'timestamp' => $timestamp,
+        ];
         $signatureBase64Valid = $signature === 'valid-signature' || base64_decode($signature, true) !== false;
         $publicKeyValid = $publicKey === 'verified-dana-public-key';
         $signatureValid = $signature === 'valid-signature' && $publicKeyValid;

@@ -41,6 +41,18 @@ PEM;
         );
     }
 
+    public function test_it_uses_the_actual_merchant_callback_path_in_the_transactional_string_to_sign(): void
+    {
+        $service = new DanaSnapSignatureService;
+        $body = '{"originalPartnerReferenceNo":"payment-001"}';
+        $timestamp = '2026-10-12T10:11:12+07:00';
+
+        $this->assertSame(
+            'POST:/api/v1/webhooks/dana:05087c0debfac657cbb4b8a6353b3acb8e22494b9710c030c041a117e16f6464:2026-10-12T10:11:12+07:00',
+            $service->transactionalStringToSign('POST', '/api/v1/webhooks/dana', $body, $timestamp),
+        );
+    }
+
     public function test_signature_test_vector_verifies_and_fails_when_signed_input_changes(): void
     {
         $service = new DanaSnapSignatureService;
