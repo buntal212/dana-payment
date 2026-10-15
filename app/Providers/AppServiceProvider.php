@@ -27,5 +27,9 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('merchant-api', function (Request $request): Limit {
             return Limit::perMinute(60)->by(hash('sha256', (string) $request->bearerToken()));
         });
+
+        RateLimiter::for('internal-service', function (Request $request): Limit {
+            return Limit::perMinute(20)->by('internal-service:'.$request->ip());
+        });
     }
 }

@@ -107,7 +107,7 @@ class MerchantPaymentApiTest extends TestCase
         [, $apiKey] = $this->merchantWithApiKey();
 
         $this->withToken($apiKey)->getJson('/api/v1/payments')->assertOk()->assertJsonMissingPath('key_hash');
-        $this->withToken($apiKey)->getJson('/api/v1/admin/merchants')->assertNotFound();
+        $this->withToken($apiKey)->getJson('/api/v1/admin/merchants')->assertUnauthorized();
     }
 
     /**

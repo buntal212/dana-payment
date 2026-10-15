@@ -43,4 +43,11 @@ return [
         'diagnostics' => env('DANA_DIAGNOSTICS', false),
     ],
 
+    'udev_internal' => [
+        'enabled' => env('UDEV_INTERNAL_ENDPOINTS_ENABLED', false),
+        'service_id' => env('UDEV_INTERNAL_SERVICE_ID', 'udev-billing'),
+        'token' => env('UDEV_INTERNAL_SERVICE_TOKEN'),
+        'abilities' => ['merchants:read', 'merchants:write'],
+    ],
+
 ];

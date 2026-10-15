@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\Merchant;
 use App\Services\MerchantApiKeyService;
+use App\Services\MerchantProvisioningService;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -13,14 +14,13 @@ use Illuminate\Support\Facades\DB;
 #[Description('Membuat merchant dan menampilkan API key awal sekali saja')]
 class ProvisionMerchant extends Command
 {
-    public function handle(MerchantApiKeyService $apiKeyService): int
+    public function handle(MerchantApiKeyService $apiKeyService, MerchantProvisioningService $merchantProvisioningService): int
     {
-        $result = DB::transaction(function () use ($apiKeyService): array {
-            $merchant = Merchant::query()->create([
+        $result = DB::transaction(function () use ($apiKeyService, $merchantProvisioningService): array {
+            $merchant = $merchantProvisioningService->createMerchant([
                 'code' => $this->argument('code'),
                 'name' => $this->argument('name'),
-                'contact_email' => $this->option('email'),
-                'status' => 'active',
+                'email' => $this->option('email'),
             ]);
 
             return ['merchant' => $merchant, ...$apiKeyService->create($merchant, $this->option('key-name'))];

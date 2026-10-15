@@ -8,6 +8,7 @@
 This application is a Laravel application running on PHP 8.3. Always use the APIs that match the installed major version of each package — do not assume a version.
 
 Before relying on a package's API, confirm its installed version:
+
 - PHP packages: run `composer show --direct` to list direct dependencies with versions, or `composer show <vendor/package>` for a single package.
 - JS packages: check `package.json` for the installed versions.
 
@@ -52,7 +53,7 @@ Before relying on a package's API, confirm its installed version:
 
 - Execute PHP in app context for debugging and testing code. Do not create models without user approval, prefer tests with factories instead. Prefer existing Artisan commands over custom tinker code.
 - Always use single quotes to prevent shell expansion: `php artisan tinker --execute 'Your::code();'`
-  - Double quotes for PHP strings inside: `php artisan tinker --execute 'User::where("active", true)->count();'`
+    - Double quotes for PHP strings inside: `php artisan tinker --execute 'User::where("active", true)->count();'`
 
 === php rules ===
 
@@ -117,5 +118,17 @@ Before relying on a package's API, confirm its installed version:
 - Run the narrowest set of tests that covers the change. Pass a file path or `--filter=testName` to `php artisan test --compact`.
 - Rerun a test after each change to it.
 - Run `vendor/bin/phpunit` to call the test runner directly. It accepts the same file path and `--filter=testName` arguments.
+
+## DANA Gapura Protection Rules
+
+Before modifying any project files, read and follow
+the instructions in DANA_GAPURA_PROTECTION.md.
+
+These rules supplement the existing Laravel Boost
+guidelines and protect the working DANA integration.
+
+If a requested change affects protected DANA code,
+configuration, or payment behavior, stop and request
+explicit user approval before proceeding.
 
 </laravel-boost-guidelines>
