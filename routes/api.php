@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\Admin\MerchantController;
 use App\Http\Controllers\Api\V1\Auth\LoginController;
 use App\Http\Controllers\Api\V1\Auth\LogoutController;
 use App\Http\Controllers\Api\V1\DanaWebhookController;
+use App\Http\Controllers\Api\V1\Internal\MerchantManagementController;
 use App\Http\Controllers\Api\V1\Internal\MerchantProvisioningController;
 use App\Http\Controllers\Api\V1\PaymentController;
 use Illuminate\Support\Facades\Route;
@@ -25,6 +26,14 @@ Route::prefix('v1/internal')->group(function (): void {
         ->middleware(['throttle:internal-service', 'internal:merchants:read']);
     Route::post('merchants', [MerchantProvisioningController::class, 'store'])
         ->middleware(['throttle:internal-service', 'internal:merchants:write']);
+    Route::get('merchants/{merchant}/readiness', [MerchantManagementController::class, 'readiness'])
+        ->middleware(['throttle:internal-service', 'internal:merchants:readiness', 'internal-https']);
+    Route::put('merchants/{merchant}/dana-configuration', [MerchantManagementController::class, 'configureDanaSandbox'])
+        ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
+    Route::get('merchants/{merchant}/api-keys', [MerchantManagementController::class, 'apiKeys'])
+        ->middleware(['throttle:internal-service', 'internal:merchants:api-keys:read', 'internal-https']);
+    Route::delete('merchants/{merchant}/api-keys/{apiKey}', [MerchantManagementController::class, 'revokeApiKey'])
+        ->middleware(['throttle:internal-merchant-management', 'internal:merchants:api-keys:write', 'internal-https']);
 });
 
 Route::prefix('v1')->middleware(['merchant:payments:read', 'throttle:merchant-api'])->group(function (): void {

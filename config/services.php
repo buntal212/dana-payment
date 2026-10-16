@@ -47,7 +47,14 @@ return [
         'enabled' => env('UDEV_INTERNAL_ENDPOINTS_ENABLED', false),
         'service_id' => env('UDEV_INTERNAL_SERVICE_ID', 'udev-billing'),
         'token' => env('UDEV_INTERNAL_SERVICE_TOKEN'),
-        'abilities' => ['merchants:read', 'merchants:write'],
+        'abilities' => [
+            'merchants:read',
+            'merchants:write',
+            'merchants:readiness',
+            'merchants:credentials:write',
+            'merchants:api-keys:read',
+            'merchants:api-keys:write',
+        ],
     ],
 
 ];

@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\AuthenticateInternalService;
 use App\Http\Middleware\AuthenticateMerchant;
+use App\Http\Middleware\RequireInternalHttps;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -17,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'internal' => AuthenticateInternalService::class,
+            'internal-https' => RequireInternalHttps::class,
             'merchant' => AuthenticateMerchant::class,
         ]);
     })

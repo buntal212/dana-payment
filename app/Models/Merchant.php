@@ -42,6 +42,16 @@ class Merchant extends Model
         return $this->hasMany(MerchantProvisioningAudit::class);
     }
 
+    public function internalManagementRequests(): HasMany
+    {
+        return $this->hasMany(InternalMerchantManagementRequest::class);
+    }
+
+    public function managementAudits(): HasMany
+    {
+        return $this->hasMany(MerchantManagementAudit::class);
+    }
+
     /** @param Builder<self> $query */
     public function scopeActive(Builder $query): Builder
     {

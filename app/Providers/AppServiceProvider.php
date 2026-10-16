@@ -31,5 +31,9 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('internal-service', function (Request $request): Limit {
             return Limit::perMinute(20)->by('internal-service:'.$request->ip());
         });
+
+        RateLimiter::for('internal-merchant-management', function (Request $request): Limit {
+            return Limit::perMinute(10)->by('internal-merchant-management:'.$request->ip());
+        });
     }
 }
