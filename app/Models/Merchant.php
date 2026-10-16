@@ -52,6 +52,11 @@ class Merchant extends Model
         return $this->hasMany(MerchantManagementAudit::class);
     }
 
+    public function internalApiKeyIssuances(): HasMany
+    {
+        return $this->hasMany(InternalMerchantApiKeyIssuance::class);
+    }
+
     /** @param Builder<self> $query */
     public function scopeActive(Builder $query): Builder
     {

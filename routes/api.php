@@ -32,6 +32,14 @@ Route::prefix('v1/internal')->group(function (): void {
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::get('merchants/{merchant}/api-keys', [MerchantManagementController::class, 'apiKeys'])
         ->middleware(['throttle:internal-service', 'internal:merchants:api-keys:read', 'internal-https']);
+    Route::post('merchants/{merchant}/api-keys', [MerchantManagementController::class, 'issueApiKey'])
+        ->middleware(['throttle:internal-merchant-management', 'internal:merchants:api-keys:issue', 'internal-https']);
+    Route::get('merchants/{merchant}/api-key-issuances/{issuance}', [MerchantManagementController::class, 'issuanceStatus'])
+        ->middleware(['throttle:internal-service', 'internal:merchants:api-keys:issue', 'internal-https']);
+    Route::post('merchants/{merchant}/api-key-issuances/{issuance}/confirm', [MerchantManagementController::class, 'confirmApiKeyIssuance'])
+        ->middleware(['throttle:internal-merchant-management', 'internal:merchants:api-keys:issue', 'internal-https']);
+    Route::post('merchants/{merchant}/api-key-issuances/{issuance}/cancel', [MerchantManagementController::class, 'cancelApiKeyIssuance'])
+        ->middleware(['throttle:internal-merchant-management', 'internal:merchants:api-keys:issue', 'internal-https']);
     Route::delete('merchants/{merchant}/api-keys/{apiKey}', [MerchantManagementController::class, 'revokeApiKey'])
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:api-keys:write', 'internal-https']);
 });

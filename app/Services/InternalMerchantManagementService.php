@@ -168,7 +168,7 @@ class InternalMerchantManagementService
                 $this->merchantNotFound($lockedMerchant);
             }
 
-            if ($lockedApiKey->revoked_at !== null || ($lockedApiKey->expires_at !== null && $lockedApiKey->expires_at->isPast())) {
+            if (! $lockedApiKey->is_active || $lockedApiKey->revoked_at !== null || ($lockedApiKey->expires_at !== null && $lockedApiKey->expires_at->isPast())) {
                 throw new UnprocessableEntityHttpException('API key tidak lagi aktif.');
             }
 

@@ -233,7 +233,7 @@ class InternalMerchantManagementApiTest extends TestCase
         $this->assertSame($rawCredentials, $existingConfig->fresh()->getRawOriginal('encrypted_credentials'));
     }
 
-    public function test_api_key_metadata_never_includes_hash_or_plaintext_and_create_route_is_absent(): void
+    public function test_api_key_metadata_never_includes_hash_or_plaintext(): void
     {
         $merchant = $this->managedMerchant();
         $plaintextKey = 'dpk_fake_plaintext_key_for_test_only';
@@ -249,10 +249,6 @@ class InternalMerchantManagementApiTest extends TestCase
             ->assertJsonMissingPath('data.0.key_hash')
             ->assertDontSee($plaintextKey)
             ->assertDontSee($apiKey->key_hash);
-
-        $this->withToken(self::ServiceToken)
-            ->postJson($this->apiKeysUrl($merchant), ['name' => 'forbidden'])
-            ->assertMethodNotAllowed();
     }
 
     public function test_api_key_revocation_requires_confirmation_and_preserves_last_or_recently_used_key(): void

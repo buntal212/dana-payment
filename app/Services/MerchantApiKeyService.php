@@ -13,7 +13,7 @@ class MerchantApiKeyService
      */
     public function create(Merchant $merchant, string $name, ?\DateTimeInterface $expiresAt = null, ?array $abilities = null): array
     {
-        $apiKey = 'dpk_'.rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+        $apiKey = $this->generateApiKey();
 
         $record = $merchant->apiKeys()->create([
             'name' => $name,
@@ -21,9 +21,15 @@ class MerchantApiKeyService
             'key_hash' => hash('sha256', $apiKey),
             'abilities' => $abilities,
             'expires_at' => $expiresAt,
+            'is_active' => true,
         ]);
 
         return ['api_key' => $apiKey, 'api_key_record' => $record];
+    }
+
+    public function generateApiKey(): string
+    {
+        return 'dpk_'.rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
     }
 
     public function authenticate(string $apiKey, ?string $ability = null): ?MerchantApiKey

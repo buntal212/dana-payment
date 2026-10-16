@@ -27,6 +27,7 @@ class MerchantApiKeyFactory extends Factory
             'expires_at' => null,
             'last_used_at' => null,
             'revoked_at' => null,
+            'is_active' => true,
         ];
     }
 }

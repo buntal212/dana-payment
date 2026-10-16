@@ -14,14 +14,14 @@ class MerchantApiKey extends Model
     use HasFactory;
 
     /** @var list<string> */
-    protected $fillable = ['merchant_id', 'name', 'key_prefix', 'key_hash', 'abilities', 'expires_at', 'last_used_at', 'revoked_at'];
+    protected $fillable = ['merchant_id', 'name', 'key_prefix', 'key_hash', 'abilities', 'expires_at', 'last_used_at', 'revoked_at', 'is_active'];
 
     /** @var list<string> */
     protected $hidden = ['key_hash'];
 
     protected function casts(): array
     {
-        return ['abilities' => 'array', 'expires_at' => 'datetime', 'last_used_at' => 'datetime', 'revoked_at' => 'datetime'];
+        return ['abilities' => 'array', 'expires_at' => 'datetime', 'last_used_at' => 'datetime', 'revoked_at' => 'datetime', 'is_active' => 'boolean'];
     }
 
     public function merchant(): BelongsTo
@@ -32,6 +32,6 @@ class MerchantApiKey extends Model
     /** @param Builder<self> $query */
     public function scopeUsable(Builder $query): Builder
     {
-        return $query->whereNull('revoked_at')->where(fn (Builder $query): Builder => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()));
+        return $query->where('is_active', true)->whereNull('revoked_at')->where(fn (Builder $query): Builder => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()));
     }
 }
