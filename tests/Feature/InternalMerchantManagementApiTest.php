@@ -251,6 +251,24 @@ class InternalMerchantManagementApiTest extends TestCase
             ->assertDontSee($apiKey->key_hash);
     }
 
+    public function test_api_key_metadata_reports_the_persisted_inactive_state_and_readiness_excludes_it(): void
+    {
+        $merchant = $this->managedMerchant();
+        $apiKey = MerchantApiKey::factory()->for($merchant, 'merchant')->create(['is_active' => false]);
+
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->apiKeysUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $apiKey->id)
+            ->assertJsonPath('data.0.is_active', false);
+
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->readinessUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.active_api_key_count', 0)
+            ->assertJsonFragment(['active_api_key']);
+    }
+
     public function test_api_key_revocation_requires_confirmation_and_preserves_last_or_recently_used_key(): void
     {
         $merchant = $this->managedMerchant();
