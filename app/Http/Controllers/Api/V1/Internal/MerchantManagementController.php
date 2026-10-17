@@ -35,7 +35,8 @@ class MerchantManagementController extends Controller
     {
         $result = $merchantManagementService->configureDanaSandbox($merchant, $request->validated(), $this->serviceId());
 
-        return response()->json(['data' => $result['result']]);
+        return response()->json(['data' => $result['result']])
+            ->header('Cache-Control', 'no-store');
     }
 
     public function apiKeys(Merchant $merchant, InternalMerchantManagementService $merchantManagementService): AnonymousResourceCollection

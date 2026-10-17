@@ -19,6 +19,8 @@ class InternalMerchantManagementService
 
     private const int ApiKeyUsageGracePeriodMinutes = 15;
 
+    public function __construct(private DanaKeyMaterialNormalizer $keyMaterialNormalizer) {}
+
     /**
      * @return array<string, mixed>
      */
@@ -112,6 +114,7 @@ class InternalMerchantManagementService
      */
     public function configureDanaSandbox(Merchant $merchant, array $attributes, string $serviceId): array
     {
+        $attributes = $this->normalizeKeyMaterial($attributes);
         $fingerprint = $this->fingerprint($attributes, ['idempotency_key']);
 
         return DB::transaction(function () use ($merchant, $attributes, $serviceId, $fingerprint): array {
@@ -435,5 +438,23 @@ class InternalMerchantManagementService
         $value = $attributes[$field] ?? $existingCredentials[$field] ?? null;
 
         return is_string($value) && trim($value) !== '' ? $value : null;
+    }
+
+    /** @param array<string, mixed> $attributes
+     * @return array<string, mixed>
+     */
+    private function normalizeKeyMaterial(array $attributes): array
+    {
+        try {
+            foreach (['private_key' => 'normalizePrivateKey', 'dana_webhook_public_key' => 'normalizePublicKey'] as $field => $method) {
+                if (is_string($attributes[$field] ?? null) && trim($attributes[$field]) !== '') {
+                    $attributes[$field] = $this->keyMaterialNormalizer->{$method}($attributes[$field]);
+                }
+            }
+        } catch (DanaKeyMaterialException $exception) {
+            throw new UnprocessableEntityHttpException($exception->getMessage());
+        }
+
+        return $attributes;
     }
 }

@@ -9,6 +9,7 @@ use App\Models\MerchantManagementAudit;
 use App\Models\MerchantPaymentConfig;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
+use Tests\Fixtures\DanaSandboxKeyMaterialFixture;
 use Tests\TestCase;
 
 class InternalMerchantManagementApiTest extends TestCase
@@ -16,10 +17,6 @@ class InternalMerchantManagementApiTest extends TestCase
     use RefreshDatabase;
 
     private const string ServiceToken = 'test-internal-management-token';
-
-    private const string PrivateKey = "-----BEGIN PRIVATE KEY-----\ntest-private-key\n-----END PRIVATE KEY-----";
-
-    private const string DanaPublicKey = "-----BEGIN PUBLIC KEY-----\ntest-dana-public-key\n-----END PUBLIC KEY-----";
 
     protected function setUp(): void
     {
@@ -140,8 +137,8 @@ class InternalMerchantManagementApiTest extends TestCase
             'enabled' => false,
             'encrypted_credentials' => [
                 'merchant_id' => 'merchant-sandbox-001',
-                'private_key' => self::PrivateKey,
-                'dana_webhook_public_key' => self::DanaPublicKey,
+                'private_key' => $this->privateKey(),
+                'dana_webhook_public_key' => $this->danaPublicKey(),
                 'origin' => 'https://udev.example',
                 'channel_id' => 'sandbox-channel',
                 'notification_url' => 'https://dana.udumbara.my.id/api/v1/webhooks/dana',
@@ -163,8 +160,8 @@ class InternalMerchantManagementApiTest extends TestCase
             ->assertJsonPath('data.configuration.dana_webhook_public_key_configured', true)
             ->assertJsonMissingPath('data.configuration.private_key')
             ->assertJsonMissingPath('data.configuration.dana_webhook_public_key')
-            ->assertDontSee(self::PrivateKey)
-            ->assertDontSee(self::DanaPublicKey);
+            ->assertDontSee($this->privateKey())
+            ->assertDontSee($this->danaPublicKey());
 
         $this->assertSame($rawCredentials, $config->fresh()->getRawOriginal('encrypted_credentials'));
 
@@ -199,7 +196,10 @@ class InternalMerchantManagementApiTest extends TestCase
     public function test_sandbox_configuration_is_encrypted_idempotent_and_never_returned(): void
     {
         $merchant = $this->managedMerchant(['code' => 'udev-central']);
-        $payload = $this->configurationPayload();
+        $payload = $this->configurationPayload([
+            'private_key' => $this->pemToBase64Der($this->privateKey()),
+            'dana_webhook_public_key' => $this->pemToBase64Der($this->danaPublicKey()),
+        ]);
         Log::spy();
 
         $this->withToken(self::ServiceToken)
@@ -210,17 +210,18 @@ class InternalMerchantManagementApiTest extends TestCase
             ->assertJsonPath('data.dana_configuration.available', true)
             ->assertJsonPath('data.dana_configuration.enabled', true)
             ->assertJsonPath('data.dana_configuration.ready', true)
-            ->assertDontSee(self::PrivateKey)
-            ->assertDontSee(self::DanaPublicKey)
+            ->assertHeader('Cache-Control')
+            ->assertDontSee($this->privateKey())
+            ->assertDontSee($this->danaPublicKey())
             ->assertDontSee('merchant-sandbox-secret');
 
         $config = MerchantPaymentConfig::query()->sole();
-        $this->assertNotSame(self::PrivateKey, $config->getRawOriginal('encrypted_credentials'));
-        $this->assertSame(self::PrivateKey, $config->encrypted_credentials['private_key']);
+        $this->assertNotSame($this->privateKey(), $config->getRawOriginal('encrypted_credentials'));
+        $this->assertSame($this->privateKey(), $config->encrypted_credentials['private_key']);
         $audit = MerchantManagementAudit::query()->sole();
         $auditPayload = json_encode($audit->safe_details, JSON_THROW_ON_ERROR);
-        $this->assertStringNotContainsString(self::PrivateKey, $auditPayload);
-        $this->assertStringNotContainsString(self::DanaPublicKey, $auditPayload);
+        $this->assertStringNotContainsString($this->privateKey(), $auditPayload);
+        $this->assertStringNotContainsString($this->danaPublicKey(), $auditPayload);
         $this->assertStringNotContainsString('merchant-sandbox-secret', $auditPayload);
         Log::shouldNotHaveReceived('debug');
         Log::shouldNotHaveReceived('info');
@@ -230,7 +231,7 @@ class InternalMerchantManagementApiTest extends TestCase
         $this->withToken(self::ServiceToken)
             ->putJson($this->configurationUrl($merchant), $payload)
             ->assertOk()
-            ->assertDontSee(self::PrivateKey);
+            ->assertDontSee($this->privateKey());
 
         $this->assertDatabaseCount('merchant_payment_configs', 1);
         $this->assertDatabaseCount('internal_merchant_management_requests', 1);
@@ -293,8 +294,8 @@ class InternalMerchantManagementApiTest extends TestCase
             ->assertJsonPath('data.dana_configuration.enabled', false);
 
         $updated = $config->fresh();
-        $this->assertSame(self::PrivateKey, $updated->encrypted_credentials['private_key']);
-        $this->assertSame(self::DanaPublicKey, $updated->encrypted_credentials['dana_webhook_public_key']);
+        $this->assertSame($this->privateKey(), $updated->encrypted_credentials['private_key']);
+        $this->assertSame($this->danaPublicKey(), $updated->encrypted_credentials['dana_webhook_public_key']);
         $this->assertNotSame('', $rawCredentials);
     }
 
@@ -446,8 +447,8 @@ class InternalMerchantManagementApiTest extends TestCase
             'idempotency_key' => 'configure-udev-central-001',
             'partner_id' => 'partner-sandbox-001',
             'merchant_id' => 'merchant-sandbox-secret',
-            'private_key' => self::PrivateKey,
-            'dana_webhook_public_key' => self::DanaPublicKey,
+            'private_key' => $this->privateKey(),
+            'dana_webhook_public_key' => $this->danaPublicKey(),
             'origin' => 'https://merchant.test',
             'channel_id' => 'channel-sandbox-001',
             'notification_url' => 'https://merchant.test/dana/notification',
@@ -482,5 +483,23 @@ class InternalMerchantManagementApiTest extends TestCase
     private function apiKeyUrl(Merchant $merchant, MerchantApiKey $apiKey): string
     {
         return $this->apiKeysUrl($merchant)."/{$apiKey->id}";
+    }
+
+    private function privateKey(): string
+    {
+        return DanaSandboxKeyMaterialFixture::PrivateKey;
+    }
+
+    private function danaPublicKey(): string
+    {
+        return DanaSandboxKeyMaterialFixture::PublicKey;
+    }
+
+    private function pemToBase64Der(string $pem): string
+    {
+        $base64 = preg_replace('/-----BEGIN [A-Z ]+-----|-----END [A-Z ]+-----|\s+/', '', $pem);
+        self::assertIsString($base64);
+
+        return $base64;
     }
 }
