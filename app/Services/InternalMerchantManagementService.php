@@ -58,6 +58,55 @@ class InternalMerchantManagementService
     }
 
     /**
+     * Mengembalikan metadata konfigurasi Sandbox yang aman untuk mengisi ulang
+     * formulir. Nilai secret tidak pernah keluar dari Gateway.
+     *
+     * @return array<string, mixed>
+     */
+    public function danaConfiguration(Merchant $merchant, string $serviceId): array
+    {
+        $this->assertServiceOwnsMerchant($merchant, $serviceId);
+        $this->assertMerchantConfigurationCanBeRead($merchant);
+
+        $config = $merchant->paymentConfigs()
+            ->where('provider', 'dana')
+            ->where('environment', 'sandbox')
+            ->first();
+        $status = $this->configurationStatus($config);
+
+        if ($config === null) {
+            return [
+                'merchant_code' => $merchant->code,
+                'environment' => 'sandbox',
+                'configuration_exists' => false,
+                'dana_configuration' => $this->publicConfigurationStatus($status),
+                'configuration' => null,
+            ];
+        }
+
+        $credentials = is_array($config->encrypted_credentials) ? $config->encrypted_credentials : [];
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'configuration_exists' => true,
+            'dana_configuration' => $this->publicConfigurationStatus($status),
+            'configuration' => [
+                'partner_id' => $config->partner_id,
+                'merchant_id' => $credentials['merchant_id'] ?? null,
+                'origin' => $credentials['origin'] ?? null,
+                'channel_id' => $credentials['channel_id'] ?? null,
+                'notification_url' => $credentials['notification_url'] ?? null,
+                'callback_url' => $config->callback_url,
+                'mcc' => $credentials['mcc'] ?? null,
+                'enabled' => $config->enabled,
+                'private_key_configured' => $this->credentialIsConfigured($credentials, 'private_key'),
+                'dana_webhook_public_key_configured' => $this->credentialIsConfigured($credentials, 'dana_webhook_public_key'),
+            ],
+        ];
+    }
+
+    /**
      * @param  array{environment: string, idempotency_key: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, notification_url: string, callback_url: string, mcc: string, enabled: bool}  $attributes
      * @return array{result: array<string, mixed>, was_idempotent_replay: bool}
      */
@@ -90,14 +139,21 @@ class InternalMerchantManagementService
                 ]);
             }
 
+            $existingCredentials = is_array($config->encrypted_credentials) ? $config->encrypted_credentials : [];
+            $privateKey = $this->credentialForUpdate($attributes, $existingCredentials, 'private_key');
+            $webhookPublicKey = $this->credentialForUpdate($attributes, $existingCredentials, 'dana_webhook_public_key');
+            if ($privateKey === null || $webhookPublicKey === null) {
+                throw new UnprocessableEntityHttpException('Private key dan DANA webhook public key wajib tersedia sebelum konfigurasi disimpan.');
+            }
+
             $config->fill([
                 'partner_id' => $attributes['partner_id'],
                 'callback_url' => $attributes['callback_url'],
                 'enabled' => $attributes['enabled'],
                 'encrypted_credentials' => [
                     'merchant_id' => $attributes['merchant_id'],
-                    'private_key' => $attributes['private_key'],
-                    'dana_webhook_public_key' => $attributes['dana_webhook_public_key'],
+                    'private_key' => $privateKey,
+                    'dana_webhook_public_key' => $webhookPublicKey,
                     'origin' => $attributes['origin'],
                     'channel_id' => $attributes['channel_id'],
                     'notification_url' => $attributes['notification_url'],
@@ -221,6 +277,13 @@ class InternalMerchantManagementService
 
         if ($merchant->status !== 'active') {
             throw new UnprocessableEntityHttpException('Merchant tidak aktif.');
+        }
+    }
+
+    private function assertMerchantConfigurationCanBeRead(Merchant $merchant): void
+    {
+        if ($merchant->code === self::ProtectedMerchantCode) {
+            throw new AccessDeniedHttpException('Merchant ini tidak dapat diakses melalui layanan internal.');
         }
     }
 
@@ -355,5 +418,22 @@ class InternalMerchantManagementService
         return is_string($value)
             && filter_var($value, FILTER_VALIDATE_URL) !== false
             && str_starts_with(strtolower($value), 'https://');
+    }
+
+    /** @param array<string, mixed> $credentials */
+    private function credentialIsConfigured(array $credentials, string $field): bool
+    {
+        return is_string($credentials[$field] ?? null) && $credentials[$field] !== '';
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     * @param  array<string, mixed>  $existingCredentials
+     */
+    private function credentialForUpdate(array $attributes, array $existingCredentials, string $field): ?string
+    {
+        $value = $attributes[$field] ?? $existingCredentials[$field] ?? null;
+
+        return is_string($value) && trim($value) !== '' ? $value : null;
     }
 }

@@ -33,6 +33,7 @@ class InternalMerchantManagementApiTest extends TestCase
                 'merchants:read',
                 'merchants:write',
                 'merchants:readiness',
+                'merchants:credentials:read',
                 'merchants:credentials:write',
                 'merchants:api-keys:read',
                 'merchants:api-keys:write',
@@ -57,6 +58,7 @@ class InternalMerchantManagementApiTest extends TestCase
         $merchant = $this->managedMerchant();
 
         $this->getJson($this->readinessUrl($merchant))->assertUnauthorized();
+        $this->getJson($this->configurationUrl($merchant))->assertUnauthorized();
 
         $this->withToken('not-the-service-token')
             ->getJson($this->readinessUrl($merchant))
@@ -68,6 +70,9 @@ class InternalMerchantManagementApiTest extends TestCase
 
         $this->withToken(self::ServiceToken)
             ->getJson($this->readinessUrl($merchant))
+            ->assertForbidden();
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->configurationUrl($merchant))
             ->assertForbidden();
     }
 
@@ -124,6 +129,71 @@ class InternalMerchantManagementApiTest extends TestCase
         $this->withToken(self::ServiceToken)
             ->getJson('/api/v1/internal/merchants/999999/readiness')
             ->assertNotFound();
+    }
+
+    public function test_dana_configuration_metadata_isolated_and_never_exposes_secrets(): void
+    {
+        $merchant = $this->managedMerchant(['code' => 'udev-central']);
+        $config = MerchantPaymentConfig::factory()->for($merchant, 'merchant')->create([
+            'partner_id' => 'partner-sandbox-001',
+            'callback_url' => 'https://udev.example/dana/callback',
+            'enabled' => false,
+            'encrypted_credentials' => [
+                'merchant_id' => 'merchant-sandbox-001',
+                'private_key' => self::PrivateKey,
+                'dana_webhook_public_key' => self::DanaPublicKey,
+                'origin' => 'https://udev.example',
+                'channel_id' => 'sandbox-channel',
+                'notification_url' => 'https://dana.udumbara.my.id/api/v1/webhooks/dana',
+                'mcc' => '7392',
+            ],
+        ]);
+        $rawCredentials = $config->getRawOriginal('encrypted_credentials');
+
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->configurationUrl($merchant))
+            ->assertOk()
+            ->assertHeader('Cache-Control')
+            ->assertJsonPath('data.merchant_code', 'udev-central')
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.configuration_exists', true)
+            ->assertJsonPath('data.configuration.partner_id', 'partner-sandbox-001')
+            ->assertJsonPath('data.configuration.merchant_id', 'merchant-sandbox-001')
+            ->assertJsonPath('data.configuration.private_key_configured', true)
+            ->assertJsonPath('data.configuration.dana_webhook_public_key_configured', true)
+            ->assertJsonMissingPath('data.configuration.private_key')
+            ->assertJsonMissingPath('data.configuration.dana_webhook_public_key')
+            ->assertDontSee(self::PrivateKey)
+            ->assertDontSee(self::DanaPublicKey);
+
+        $this->assertSame($rawCredentials, $config->fresh()->getRawOriginal('encrypted_credentials'));
+
+        $unmanaged = Merchant::factory()->create();
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->configurationUrl($unmanaged))
+            ->assertNotFound();
+
+        $protected = $this->managedMerchant(['code' => 'larissama']);
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->configurationUrl($protected))
+            ->assertForbidden();
+    }
+
+    public function test_dana_configuration_metadata_reports_when_no_configuration_exists_and_requires_its_ability(): void
+    {
+        $merchant = $this->managedMerchant();
+
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->configurationUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.configuration_exists', false)
+            ->assertJsonPath('data.configuration', null);
+
+        config()->set('services.udev_internal.abilities', ['merchants:credentials:write']);
+
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->configurationUrl($merchant))
+            ->assertForbidden();
     }
 
     public function test_sandbox_configuration_is_encrypted_idempotent_and_never_returned(): void
@@ -190,9 +260,42 @@ class InternalMerchantManagementApiTest extends TestCase
                 'private_key' => 'bukan-pem',
             ]))
             ->assertUnprocessable();
+        $this->withToken(self::ServiceToken)
+            ->putJson($this->configurationUrl($merchant), $this->configurationPayload([
+                'idempotency_key' => 'invalid-configuration-004',
+                'private_key' => null,
+                'dana_webhook_public_key' => null,
+            ]))
+            ->assertUnprocessable();
 
         $this->assertDatabaseCount('merchant_payment_configs', 0);
         $this->assertDatabaseCount('merchant_management_audits', 0);
+    }
+
+    public function test_configuration_update_with_empty_secret_fields_preserves_existing_encrypted_secrets(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->withToken(self::ServiceToken)
+            ->putJson($this->configurationUrl($merchant), $this->configurationPayload())
+            ->assertOk();
+
+        $config = MerchantPaymentConfig::query()->sole();
+        $rawCredentials = $config->getRawOriginal('encrypted_credentials');
+
+        $this->withToken(self::ServiceToken)
+            ->putJson($this->configurationUrl($merchant), $this->configurationPayload([
+                'idempotency_key' => 'configure-udev-central-002',
+                'private_key' => null,
+                'dana_webhook_public_key' => null,
+                'enabled' => false,
+            ]))
+            ->assertOk()
+            ->assertJsonPath('data.dana_configuration.enabled', false);
+
+        $updated = $config->fresh();
+        $this->assertSame(self::PrivateKey, $updated->encrypted_credentials['private_key']);
+        $this->assertSame(self::DanaPublicKey, $updated->encrypted_credentials['dana_webhook_public_key']);
+        $this->assertNotSame('', $rawCredentials);
     }
 
     public function test_sensitive_management_mutations_are_rate_limited(): void

@@ -25,6 +25,12 @@ class MerchantManagementController extends Controller
         return new InternalMerchantReadinessResource($merchantManagementService->readiness($merchant, $this->serviceId()));
     }
 
+    public function danaConfiguration(Merchant $merchant, InternalMerchantManagementService $merchantManagementService): JsonResponse
+    {
+        return response()->json(['data' => $merchantManagementService->danaConfiguration($merchant, $this->serviceId())])
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function configureDanaSandbox(Merchant $merchant, StoreInternalMerchantDanaConfigurationRequest $request, InternalMerchantManagementService $merchantManagementService): JsonResponse
     {
         $result = $merchantManagementService->configureDanaSandbox($merchant, $request->validated(), $this->serviceId());

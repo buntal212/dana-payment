@@ -51,6 +51,7 @@ return [
             'merchants:read',
             'merchants:write',
             'merchants:readiness',
+            'merchants:credentials:read',
             'merchants:credentials:write',
             'merchants:api-keys:read',
             'merchants:api-keys:write',

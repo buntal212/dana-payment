@@ -28,6 +28,8 @@ Route::prefix('v1/internal')->group(function (): void {
         ->middleware(['throttle:internal-service', 'internal:merchants:write']);
     Route::get('merchants/{merchant}/readiness', [MerchantManagementController::class, 'readiness'])
         ->middleware(['throttle:internal-service', 'internal:merchants:readiness', 'internal-https']);
+    Route::get('merchants/{merchant}/dana-configuration', [MerchantManagementController::class, 'danaConfiguration'])
+        ->middleware(['throttle:internal-service', 'internal:merchants:credentials:read', 'internal-https']);
     Route::put('merchants/{merchant}/dana-configuration', [MerchantManagementController::class, 'configureDanaSandbox'])
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::get('merchants/{merchant}/api-keys', [MerchantManagementController::class, 'apiKeys'])
