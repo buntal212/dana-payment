@@ -24,6 +24,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
     public function startCheckout(Payment $payment, MerchantPaymentConfig $config): array
     {
         $credentials = $this->credentialResolver->resolve($config);
+        $returnUrl = $this->returnUrl($payment, $credentials->returnUrl);
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
         $expiresAt = now('Asia/Jakarta')->addMinutes(30);
         $payload = [
@@ -32,7 +33,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
             'amount' => ['value' => $this->amountFormatter->formatIdr($payment->amount_minor), 'currency' => $payment->currency],
             'validUpTo' => $expiresAt->format('Y-m-d\\TH:i:sP'),
             'urlParams' => [
-                ['url' => $credentials->returnUrl, 'type' => 'PAY_RETURN', 'isDeeplink' => 'N'],
+                ['url' => $returnUrl, 'type' => 'PAY_RETURN', 'isDeeplink' => 'N'],
                 ['url' => $credentials->notificationUrl, 'type' => 'NOTIFICATION', 'isDeeplink' => 'N'],
             ],
             'additionalInfo' => [
@@ -119,6 +120,23 @@ class DanaPaymentGateway implements PaymentGatewayInterface
     {
         return app()->environment(['local', 'testing'])
             || filter_var(config('services.dana.diagnostics', false), FILTER_VALIDATE_BOOL);
+    }
+
+    private function returnUrl(Payment $payment, string $configuredReturnUrl): string
+    {
+        $metadata = $payment->metadata;
+        $context = is_array($metadata) ? ($metadata['udev_sandbox_return_context'] ?? null) : null;
+        $isSandboxTester = is_array($metadata) && ($metadata['udev_sandbox_tester'] ?? false) === true;
+
+        if (! $isSandboxTester || ! is_string($context) || preg_match('/\A[A-Za-z0-9_-]{43}\z/', $context) !== 1) {
+            return $configuredReturnUrl;
+        }
+
+        if (! filter_var($configuredReturnUrl, FILTER_VALIDATE_URL) || ! str_starts_with(strtolower($configuredReturnUrl), 'https://')) {
+            throw new \LogicException('PAY_RETURN Sandbox tidak valid.');
+        }
+
+        return $configuredReturnUrl.(str_contains($configuredReturnUrl, '?') ? '&' : '?').'context='.rawurlencode($context);
     }
 
     private function logResponseDiagnostics(Payment $payment, Response $response, mixed $responseBody): void

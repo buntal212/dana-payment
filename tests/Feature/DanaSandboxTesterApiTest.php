@@ -99,6 +99,7 @@ class DanaSandboxTesterApiTest extends TestCase
     {
         $merchant = $this->managedMerchant();
         $this->validConfiguration($merchant);
+        $returnContext = str_repeat('A', 43);
         Http::preventStrayRequests();
         Http::fake([
             'https://dana-sandbox.test/*' => Http::response([
@@ -109,13 +110,14 @@ class DanaSandboxTesterApiTest extends TestCase
         ]);
 
         $response = $this->withToken(self::ServiceToken)
-            ->postJson($this->transactionUrl($merchant), ['amount_minor' => 10_000], ['Idempotency-Key' => 'sandbox-tester-transaction-001'])
+            ->postJson($this->transactionUrl($merchant), ['amount_minor' => 10_000, 'return_context' => $returnContext], ['Idempotency-Key' => 'sandbox-tester-transaction-001'])
             ->assertCreated()
             ->assertJsonPath('data.environment', 'sandbox')
             ->assertJsonPath('data.authentication.status', 'confirmed_by_checkout_response')
             ->assertJsonPath('data.transaction.status', 'pending')
             ->assertJsonPath('data.transaction.checkout_available', true)
-            ->assertJsonPath('data.transaction.checkout_url', 'https://checkout.sandbox.dana.id/session/tester-001');
+            ->assertJsonPath('data.transaction.checkout_url', 'https://checkout.sandbox.dana.id/session/tester-001')
+            ->assertJsonPath('data.return_context', $returnContext);
 
         $paymentId = $response->json('data.transaction.id');
         $this->assertIsString($paymentId);
@@ -131,9 +133,12 @@ class DanaSandboxTesterApiTest extends TestCase
             'status' => 'succeeded',
         ]);
         Http::assertSent(function (Request $request): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+
             return $request->url() === 'https://dana-sandbox.test/payment-gateway/v1.0/debit/payment-host-to-host.htm'
                 && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
                 && $request->hasHeader('CHANNEL-ID', 'channel-sandbox-001')
+                && ($payload['urlParams'][0]['url'] ?? null) === 'https://merchant.test/dana/return?context='.str_repeat('A', 43)
                 && ! str_contains($request->body(), DanaSandboxKeyMaterialFixture::PrivateKey);
         });
     }
@@ -144,11 +149,11 @@ class DanaSandboxTesterApiTest extends TestCase
         $otherMerchant = $this->managedMerchant(['code' => 'udev-two']);
         $ownPayment = Payment::factory()->for($merchant)->create([
             'status' => 'pending',
-            'metadata' => ['udev_sandbox_tester' => true],
+            'metadata' => ['udev_sandbox_tester' => true, 'udev_sandbox_return_context' => str_repeat('B', 43)],
         ]);
         $otherPayment = Payment::factory()->for($otherMerchant)->create([
             'status' => 'pending',
-            'metadata' => ['udev_sandbox_tester' => true],
+            'metadata' => ['udev_sandbox_tester' => true, 'udev_sandbox_return_context' => str_repeat('C', 43)],
         ]);
         DanaSandboxTestRun::factory()->for($merchant)->for($ownPayment)->create();
         DanaSandboxTestRun::factory()->for($otherMerchant)->for($otherPayment)->create();

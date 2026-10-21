@@ -21,6 +21,9 @@ class StoreDanaSandboxTestTransactionRequest extends FormRequest
             'idempotency_key' => ['prohibited'],
             'metadata' => ['prohibited'],
             'status' => ['prohibited'],
+            // Opsional hanya untuk kompatibilitas rollout dengan Billing versi sebelumnya.
+            // Billing yang mendukung halaman hasil selalu mengirimkan nilai ini.
+            'return_context' => ['nullable', 'string', 'regex:/\A[A-Za-z0-9_-]{43}\z/'],
         ];
     }
 
@@ -34,12 +37,13 @@ class StoreDanaSandboxTestTransactionRequest extends FormRequest
         }];
     }
 
-    /** @return array{amount_minor: int, idempotency_key: string} */
+    /** @return array{amount_minor: int, idempotency_key: string, return_context: ?string} */
     public function transactionAttributes(): array
     {
         return [
             'amount_minor' => $this->integer('amount_minor'),
             'idempotency_key' => (string) $this->header('Idempotency-Key'),
+            'return_context' => $this->filled('return_context') ? (string) $this->input('return_context') : null,
         ];
     }
 }

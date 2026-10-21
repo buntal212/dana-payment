@@ -6,6 +6,7 @@ use App\Models\Merchant;
 use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
 use App\Services\DanaAmountFormatter;
+use App\Services\DanaPaymentGateway;
 use App\Services\DanaSnapSignatureService;
 use App\Services\MerchantApiKeyService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -48,6 +49,7 @@ class DanaHostedCheckoutTest extends TestCase
             $this->assertNotEmpty($header('X-EXTERNAL-ID'));
             $this->assertSame('merchant-dana-001', $request->data()['merchantId']);
             $this->assertSame(['value' => '10000.00', 'currency' => 'IDR'], $request->data()['amount']);
+            $this->assertSame('https://merchant.example/payment-return', $request->data()['urlParams'][0]['url']);
 
             return ['responseCode' => '2005400', 'referenceNo' => 'DANA-ORDER-001', 'webRedirectUrl' => 'https://checkout.sandbox.dana.id/session/001'];
         });
@@ -74,6 +76,28 @@ class DanaHostedCheckoutTest extends TestCase
                 && ! in_array('test-private-key', $context, true);
         })->once();
         Http::assertSentCount(1);
+    }
+
+    public function test_sandbox_tester_checkout_appends_only_its_valid_return_context_to_registered_callback(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'merchant_order_id' => 'sandbox-tester-return-context',
+            'metadata' => [
+                'udev_sandbox_tester' => true,
+                'udev_sandbox_return_context' => str_repeat('A', 43),
+            ],
+        ]);
+        Http::fake(function (HttpRequest $request): array {
+            $this->assertSame(
+                'https://merchant.example/payment-return?context='.str_repeat('A', 43),
+                $request->data()['urlParams'][0]['url'],
+            );
+
+            return ['responseCode' => '2005400', 'referenceNo' => 'DANA-ORDER-SANDBOX-RESULT', 'webRedirectUrl' => 'https://checkout.sandbox.dana.id/session/sandbox-result'];
+        });
+
+        app(DanaPaymentGateway::class)->startCheckout($payment, $merchant->paymentConfigs()->firstOrFail());
     }
 
     public function test_invalid_signature_response_from_dana_does_not_create_a_checkout_or_mark_payment_paid(): void

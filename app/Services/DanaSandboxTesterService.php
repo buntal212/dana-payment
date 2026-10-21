@@ -49,7 +49,7 @@ class DanaSandboxTesterService
     }
 
     /**
-     * @param  array{amount_minor: int, idempotency_key: string}  $attributes
+     * @param  array{amount_minor: int, idempotency_key: string, return_context: ?string}  $attributes
      * @return array<string, mixed>
      */
     public function createTransaction(Merchant $merchant, array $attributes, string $serviceId): array
@@ -69,13 +69,30 @@ class DanaSandboxTesterService
         }
 
         $merchantOrderId = $this->testerOrderId($attributes['idempotency_key']);
+        $payment = Payment::query()
+            ->forMerchant($merchant)
+            ->where('idempotency_key', $attributes['idempotency_key'])
+            ->first();
+
+        if ($payment !== null && ! $this->matchesExistingTransaction($payment, $attributes)) {
+            throw new UnprocessableEntityHttpException('Idempotency-Key sudah digunakan untuk transaksi Sandbox yang berbeda.');
+        }
+
+        $returnContext = $payment === null
+            ? $attributes['return_context']
+            : $this->returnContext($payment);
+
+        $metadata = ['udev_sandbox_tester' => true];
+        if ($returnContext !== null) {
+            $metadata['udev_sandbox_return_context'] = $returnContext;
+        }
 
         try {
             $payment = $this->paymentService->createHostedCheckout($merchant, [
                 'merchant_order_id' => $merchantOrderId,
                 'amount_minor' => $attributes['amount_minor'],
                 'currency' => 'IDR',
-                'metadata' => ['udev_sandbox_tester' => true],
+                'metadata' => $metadata,
                 'idempotency_key' => $attributes['idempotency_key'],
             ], $this->paymentGateway);
         } catch (\LogicException|\RuntimeException $exception) {
@@ -105,7 +122,7 @@ class DanaSandboxTesterService
             $payment,
         );
 
-        return [
+        $result = [
             'merchant_code' => $merchant->code,
             'environment' => 'sandbox',
             'authentication' => [
@@ -114,6 +131,11 @@ class DanaSandboxTesterService
             ],
             'transaction' => $this->paymentData($payment, $checkoutUrl),
         ];
+        if (($returnContext = $this->returnContext($payment)) !== null) {
+            $result['return_context'] = $returnContext;
+        }
+
+        return $result;
     }
 
     /** @return array<string, mixed> */
@@ -139,11 +161,16 @@ class DanaSandboxTesterService
             $payment,
         );
 
-        return [
+        $result = [
             'merchant_code' => $merchant->code,
             'environment' => 'sandbox',
             'transaction' => $this->paymentData($payment, $this->safeCheckoutUrl($payment->checkout_url)),
         ];
+        if (($returnContext = $this->returnContext($payment)) !== null) {
+            $result['return_context'] = $returnContext;
+        }
+
+        return $result;
     }
 
     /** @return LengthAwarePaginator<int, DanaSandboxTestRun> */
@@ -258,6 +285,25 @@ class DanaSandboxTesterService
             && str_starts_with(strtolower($url), 'https://')
             ? $url
             : null;
+    }
+
+    /** @param array{amount_minor: int, idempotency_key: string, return_context: ?string} $attributes */
+    private function matchesExistingTransaction(Payment $payment, array $attributes): bool
+    {
+        return $payment->amount_minor === $attributes['amount_minor']
+            && $payment->currency === 'IDR'
+            && is_array($payment->metadata)
+            && ($payment->metadata['udev_sandbox_tester'] ?? false) === true;
+    }
+
+    private function returnContext(Payment $payment): ?string
+    {
+        $context = $payment->metadata['udev_sandbox_return_context'] ?? null;
+        if (! is_string($context) || preg_match('/\A[A-Za-z0-9_-]{43}\z/', $context) !== 1) {
+            return null;
+        }
+
+        return $context;
     }
 
     private function configured(mixed $value): bool
