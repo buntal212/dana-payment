@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\Auth\LogoutController;
 use App\Http\Controllers\Api\V1\DanaWebhookController;
 use App\Http\Controllers\Api\V1\Internal\MerchantManagementController;
 use App\Http\Controllers\Api\V1\Internal\MerchantProvisioningController;
+use App\Http\Controllers\Api\V1\Internal\PaymentAuditController;
 use App\Http\Controllers\Api\V1\PaymentController;
 use Illuminate\Support\Facades\Route;
 
@@ -41,6 +42,16 @@ Route::prefix('v1/internal')->group(function (): void {
     Route::get('merchants/{merchant}/sandbox-tester/transactions/{paymentId}/status', [MerchantManagementController::class, 'danaSandboxTestTransactionStatus'])
         ->whereUlid('paymentId')
         ->middleware(['throttle:internal-service', 'internal:merchants:credentials:read', 'internal-https']);
+    Route::get('merchants/{merchant}/payments/{paymentId}/audit', [PaymentAuditController::class, 'show'])
+        ->whereUlid('paymentId')
+        ->middleware(['throttle:internal-service', 'internal:payments:audit:read', 'internal-https']);
+    Route::get('merchants/{merchant}/payments/{paymentId}/webhooks', [PaymentAuditController::class, 'webhooks'])
+        ->whereUlid('paymentId')
+        ->middleware(['throttle:internal-service', 'internal:payments:audit:read', 'internal-https']);
+    Route::get('merchants/{merchant}/payment-audit', [PaymentAuditController::class, 'index'])
+        ->middleware(['throttle:internal-service', 'internal:payments:audit:read', 'internal-https']);
+    Route::get('merchants/{merchant}/payment-audit/summary', [PaymentAuditController::class, 'summary'])
+        ->middleware(['throttle:internal-service', 'internal:payments:audit:read', 'internal-https']);
     Route::get('merchants/{merchant}/api-keys', [MerchantManagementController::class, 'apiKeys'])
         ->middleware(['throttle:internal-service', 'internal:merchants:api-keys:read', 'internal-https']);
     Route::post('merchants/{merchant}/api-keys', [MerchantManagementController::class, 'issueApiKey'])

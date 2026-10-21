@@ -56,6 +56,8 @@ return [
             'merchants:api-keys:read',
             'merchants:api-keys:write',
             'merchants:api-keys:issue',
+            'payments:audit:read',
+            'payments:audit:read',
         ],
         'api_key_issuance_pending_ttl_minutes' => (int) env('UDEV_INTERNAL_API_KEY_ISSUANCE_PENDING_TTL_MINUTES', 10),
     ],
