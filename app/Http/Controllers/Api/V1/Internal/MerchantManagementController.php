@@ -7,15 +7,18 @@ use App\Http\Requests\Api\V1\Internal\CancelInternalMerchantApiKeyIssuanceReques
 use App\Http\Requests\Api\V1\Internal\ConfirmInternalMerchantApiKeyIssuanceRequest;
 use App\Http\Requests\Api\V1\Internal\IssueInternalMerchantApiKeyRequest;
 use App\Http\Requests\Api\V1\Internal\RevokeInternalMerchantApiKeyRequest;
+use App\Http\Requests\Api\V1\Internal\StoreDanaSandboxTestTransactionRequest;
 use App\Http\Requests\Api\V1\Internal\StoreInternalMerchantDanaConfigurationRequest;
 use App\Http\Resources\InternalMerchantApiKeyResource;
 use App\Http\Resources\InternalMerchantReadinessResource;
 use App\Models\InternalMerchantApiKeyIssuance;
 use App\Models\Merchant;
 use App\Models\MerchantApiKey;
+use App\Services\DanaSandboxTesterService;
 use App\Services\InternalMerchantApiKeyIssuanceService;
 use App\Services\InternalMerchantManagementService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 class MerchantManagementController extends Controller
@@ -37,6 +40,50 @@ class MerchantManagementController extends Controller
 
         return response()->json(['data' => $result['result']])
             ->header('Cache-Control', 'no-store');
+    }
+
+    public function validateDanaSandboxTester(Merchant $merchant, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        return response()->json(['data' => $testerService->validateConfiguration($merchant, $this->serviceId())])
+            ->header('Cache-Control', 'no-store');
+    }
+
+    public function createDanaSandboxTestTransaction(Merchant $merchant, StoreDanaSandboxTestTransactionRequest $request, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        return response()->json(['data' => $testerService->createTransaction($merchant, $request->transactionAttributes(), $this->serviceId())], 201)
+            ->header('Cache-Control', 'no-store');
+    }
+
+    public function danaSandboxTestTransactionStatus(Merchant $merchant, string $paymentId, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        return response()->json(['data' => $testerService->transactionStatus($merchant, $paymentId, $this->serviceId())])
+            ->header('Cache-Control', 'no-store');
+    }
+
+    public function danaSandboxTestHistory(Merchant $merchant, Request $request, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        $validated = $request->validate(['per_page' => ['nullable', 'integer', 'min:1', 'max:50']]);
+        $runs = $testerService->history($merchant, $this->serviceId(), $validated['per_page'] ?? 15);
+
+        return response()->json([
+            'data' => $runs->getCollection()->map(fn ($run): array => [
+                'id' => $run->getKey(),
+                'merchant_code' => $merchant->code,
+                'environment' => $run->environment,
+                'operation' => $run->operation,
+                'status' => $run->status,
+                'message' => $run->message,
+                'payment_id' => $run->payment?->public_id,
+                'payment_status' => $run->payment?->status,
+                'created_at' => $run->created_at?->toIso8601String(),
+            ])->values(),
+            'meta' => [
+                'current_page' => $runs->currentPage(),
+                'per_page' => $runs->perPage(),
+                'total' => $runs->total(),
+                'last_page' => $runs->lastPage(),
+            ],
+        ])->header('Cache-Control', 'no-store');
     }
 
     public function apiKeys(Merchant $merchant, InternalMerchantManagementService $merchantManagementService): AnonymousResourceCollection

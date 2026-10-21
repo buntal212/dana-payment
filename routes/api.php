@@ -32,6 +32,15 @@ Route::prefix('v1/internal')->group(function (): void {
         ->middleware(['throttle:internal-service', 'internal:merchants:credentials:read', 'internal-https']);
     Route::put('merchants/{merchant}/dana-configuration', [MerchantManagementController::class, 'configureDanaSandbox'])
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
+    Route::get('merchants/{merchant}/sandbox-tester/validation', [MerchantManagementController::class, 'validateDanaSandboxTester'])
+        ->middleware(['throttle:internal-service', 'internal:merchants:credentials:read', 'internal-https']);
+    Route::get('merchants/{merchant}/sandbox-tester/transactions', [MerchantManagementController::class, 'danaSandboxTestHistory'])
+        ->middleware(['throttle:internal-service', 'internal:merchants:credentials:read', 'internal-https']);
+    Route::post('merchants/{merchant}/sandbox-tester/transactions', [MerchantManagementController::class, 'createDanaSandboxTestTransaction'])
+        ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
+    Route::get('merchants/{merchant}/sandbox-tester/transactions/{paymentId}/status', [MerchantManagementController::class, 'danaSandboxTestTransactionStatus'])
+        ->whereUlid('paymentId')
+        ->middleware(['throttle:internal-service', 'internal:merchants:credentials:read', 'internal-https']);
     Route::get('merchants/{merchant}/api-keys', [MerchantManagementController::class, 'apiKeys'])
         ->middleware(['throttle:internal-service', 'internal:merchants:api-keys:read', 'internal-https']);
     Route::post('merchants/{merchant}/api-keys', [MerchantManagementController::class, 'issueApiKey'])
