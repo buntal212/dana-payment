@@ -200,6 +200,32 @@ class DanaHostedCheckoutTest extends TestCase
         Log::shouldNotHaveReceived('warning');
     }
 
+    public function test_finish_notify_without_original_partner_reference_is_rejected_without_changing_payment_status(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'metadata' => [
+                'udev_sandbox_tester' => true,
+                'udev_sandbox_payment_method' => 'qris',
+            ],
+            'provider_order_id' => 'DANA-ORDER-QRIS-MISSING-REFERENCE',
+        ]);
+        $payload = $this->finishNotifyPayload($payment, '00');
+        unset($payload['originalPartnerReferenceNo']);
+
+        $this->postWebhook($payload)->assertBadRequest();
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
+        $this->assertDatabaseHas('payment_webhooks', [
+            'merchant_id' => null,
+            'payment_id' => null,
+            'provider' => 'dana',
+            'environment' => 'sandbox',
+            'processing_status' => 'rejected',
+            'error_code' => 'missing_reference',
+        ]);
+    }
+
     public function test_webhook_with_invalid_timestamp_is_rejected_and_reports_only_timestamp_failure(): void
     {
         [$merchant] = $this->merchantWithDanaConfig();
