@@ -43,6 +43,11 @@ class MerchantProvisioningService
                     return $this->sameRequestOrConflict($existing, $fingerprint);
                 }
 
+                $mappedRequest = $this->matchingProvisionedMerchant($attributes, $serviceId, $fingerprint);
+                if ($mappedRequest !== null) {
+                    return $mappedRequest;
+                }
+
                 $merchant = $this->createMerchant($attributes);
                 $request = InternalMerchantProvisioningRequest::query()->create([
                     'service_id' => $serviceId,
@@ -91,6 +96,29 @@ class MerchantProvisioningService
         }
 
         return $request->load('merchant');
+    }
+
+    /** @param array{code: string, name: string, email: string|null, environment: string, idempotency_key: string} $attributes */
+    private function matchingProvisionedMerchant(array $attributes, string $serviceId, string $fingerprint): ?InternalMerchantProvisioningRequest
+    {
+        $merchant = Merchant::query()->where('code', $attributes['code'])->lockForUpdate()->first();
+        if ($merchant === null) {
+            return null;
+        }
+
+        $request = InternalMerchantProvisioningRequest::query()
+            ->where('merchant_id', $merchant->getKey())
+            ->where('service_id', $serviceId)
+            ->where('environment', $attributes['environment'])
+            ->lockForUpdate()
+            ->latest('id')
+            ->first();
+
+        if ($request !== null && hash_equals($request->request_fingerprint, $fingerprint)) {
+            return $request->load('merchant');
+        }
+
+        throw new ConflictHttpException('Kode merchant sudah digunakan oleh identitas atau environment berbeda.');
     }
 
     /**

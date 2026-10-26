@@ -184,7 +184,7 @@ class InternalMerchantProvisioningApiTest extends TestCase
         $this->assertDatabaseCount('merchants', 1);
     }
 
-    public function test_duplicate_merchant_code_is_rejected_without_creating_a_partial_request(): void
+    public function test_matching_merchant_identity_with_a_new_idempotency_key_reuses_its_existing_mapping(): void
     {
         $this->withToken(self::ServiceToken)
             ->postJson('/api/v1/internal/merchants', $this->payload())
@@ -194,7 +194,26 @@ class InternalMerchantProvisioningApiTest extends TestCase
             ->postJson('/api/v1/internal/merchants', $this->payload([
                 'idempotency_key' => 'provision-udev-salon-002',
             ]))
-            ->assertConflict();
+            ->assertOk()
+            ->assertJsonPath('data.merchant_code', 'udev-salon');
+
+        $this->assertDatabaseCount('merchants', 1);
+        $this->assertDatabaseCount('internal_merchant_provisioning_requests', 1);
+    }
+
+    public function test_duplicate_merchant_code_with_a_different_identity_is_rejected_without_creating_a_partial_request(): void
+    {
+        $this->withToken(self::ServiceToken)
+            ->postJson('/api/v1/internal/merchants', $this->payload())
+            ->assertCreated();
+
+        $this->withToken(self::ServiceToken)
+            ->postJson('/api/v1/internal/merchants', $this->payload([
+                'idempotency_key' => 'provision-udev-salon-different-identity',
+                'name' => 'Nama Merchant Berbeda',
+            ]))
+            ->assertConflict()
+            ->assertJsonPath('message', 'Kode merchant sudah digunakan oleh identitas atau environment berbeda.');
 
         $this->assertDatabaseCount('merchants', 1);
         $this->assertDatabaseCount('internal_merchant_provisioning_requests', 1);
