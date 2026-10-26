@@ -77,7 +77,7 @@ class PaymentService
     {
         $payment = $this->createPending($merchant, $attributes);
 
-        if ($payment->checkout_url !== null) {
+        if ($payment->provider_order_id !== null) {
             return $payment;
         }
 
@@ -92,7 +92,21 @@ class PaymentService
             throw new \LogicException('Konfigurasi DANA Sandbox belum tersedia untuk merchant ini.');
         }
 
-        $checkout = $gateway->startCheckout($payment, $config);
+        try {
+            $checkout = $gateway->startCheckout($payment, $config);
+        } catch (\RuntimeException $exception) {
+            PaymentEvent::query()->create([
+                'merchant_id' => $merchant->getKey(),
+                'payment_id' => $payment->getKey(),
+                'event_type' => 'payment.checkout_failed',
+                'old_status' => 'pending',
+                'new_status' => 'pending',
+                'source' => 'provider',
+                'safe_details' => ['provider' => 'dana'],
+            ]);
+
+            throw $exception;
+        }
 
         return DB::transaction(function () use ($checkout, $merchant, $payment): Payment {
             $lockedPayment = Payment::query()->forMerchant($merchant)->lockForUpdate()->findOrFail($payment->getKey());
@@ -105,6 +119,10 @@ class PaymentService
                 'provider_order_id' => $checkout['provider_order_id'],
                 'checkout_url' => $checkout['checkout_url'],
                 'expires_at' => $checkout['expires_at'],
+                'metadata' => [
+                    ...(is_array($lockedPayment->metadata) ? $lockedPayment->metadata : []),
+                    'udev_sandbox_payment_instruction' => $checkout['payment_instruction'],
+                ],
             ]);
 
             PaymentEvent::query()->create([

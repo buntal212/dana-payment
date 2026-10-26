@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Api\V1\Internal;
 
+use App\Enums\DanaSandboxPaymentMethod;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Validator;
 
@@ -16,6 +17,7 @@ class StoreDanaSandboxTestTransactionRequest extends FormRequest
     {
         return [
             'amount_minor' => ['required', 'integer', 'min:1', 'max:999999999999999'],
+            'payment_method' => ['required', 'string', 'in:'.implode(',', array_column(DanaSandboxPaymentMethod::cases(), 'value'))],
             'currency' => ['prohibited'],
             'environment' => ['prohibited'],
             'idempotency_key' => ['prohibited'],
@@ -37,11 +39,12 @@ class StoreDanaSandboxTestTransactionRequest extends FormRequest
         }];
     }
 
-    /** @return array{amount_minor: int, idempotency_key: string, return_context: ?string} */
+    /** @return array{amount_minor: int, payment_method: string, idempotency_key: string, return_context: ?string} */
     public function transactionAttributes(): array
     {
         return [
             'amount_minor' => $this->integer('amount_minor'),
+            'payment_method' => (string) $this->input('payment_method'),
             'idempotency_key' => (string) $this->header('Idempotency-Key'),
             'return_context' => $this->filled('return_context') ? (string) $this->input('return_context') : null,
         ];

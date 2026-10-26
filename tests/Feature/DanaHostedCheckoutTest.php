@@ -100,6 +100,54 @@ class DanaHostedCheckoutTest extends TestCase
         app(DanaPaymentGateway::class)->startCheckout($payment, $merchant->paymentConfigs()->firstOrFail());
     }
 
+    public function test_sandbox_custom_checkout_only_uses_the_documented_wallet_qris_and_va_options(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $config = $merchant->paymentConfigs()->firstOrFail();
+        $credentials = $config->encrypted_credentials;
+        $credentials['external_store_id'] = 'sandbox-store-001';
+        $config->update(['encrypted_credentials' => $credentials]);
+        $requests = [];
+        Http::fake(function (HttpRequest $request) use (&$requests): array {
+            $requests[] = $request->data();
+            $method = $request->data()['payOptionDetails'][0]['payMethod'] ?? null;
+
+            return [
+                'responseCode' => '2005400',
+                'referenceNo' => 'DANA-CUSTOM-'.count($requests),
+                'webRedirectUrl' => $method === 'BALANCE' ? 'https://checkout.sandbox.dana.id/session/wallet' : null,
+                'additionalInfo' => $method === 'BALANCE' ? [] : ['paymentCode' => 'PAYMENT-CODE-'.count($requests)],
+            ];
+        });
+        $methods = [
+            'dana_wallet' => ['BALANCE', '', 'redirect'],
+            'qris' => ['NETWORK_PAY', 'NETWORK_PAY_PG_QRIS', 'qris'],
+            'va_bri' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_BRI', 'virtual_account'],
+            'va_pani' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_PANI', 'virtual_account'],
+            'va_cimb' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_CIMB', 'virtual_account'],
+            'va_btpn' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_BTPN', 'virtual_account'],
+        ];
+
+        foreach ($methods as $method => [$payMethod, $payOption, $instructionType]) {
+            $payment = Payment::factory()->for($merchant)->create([
+                'metadata' => [
+                    'udev_sandbox_tester' => true,
+                    'udev_sandbox_payment_method' => $method,
+                ],
+            ]);
+
+            $result = app(DanaPaymentGateway::class)->startCheckout($payment, $config);
+
+            $this->assertSame($instructionType, $result['payment_instruction']['type']);
+            $this->assertSame($payMethod, $requests[array_key_last($requests)]['payOptionDetails'][0]['payMethod']);
+            $this->assertSame($payOption, $requests[array_key_last($requests)]['payOptionDetails'][0]['payOption']);
+        }
+
+        $qrisRequest = $requests[1];
+        $this->assertSame('sandbox-store-001', $qrisRequest['externalStoreId']);
+        $this->assertSame('API', $qrisRequest['additionalInfo']['order']['scenario']);
+    }
+
     public function test_invalid_signature_response_from_dana_does_not_create_a_checkout_or_mark_payment_paid(): void
     {
         [$merchant, $apiKey] = $this->merchantWithDanaConfig();

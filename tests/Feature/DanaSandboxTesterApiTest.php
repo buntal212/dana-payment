@@ -110,7 +110,7 @@ class DanaSandboxTesterApiTest extends TestCase
         ]);
 
         $response = $this->withToken(self::ServiceToken)
-            ->postJson($this->transactionUrl($merchant), ['amount_minor' => 10_000, 'return_context' => $returnContext], ['Idempotency-Key' => 'sandbox-tester-transaction-001'])
+            ->postJson($this->transactionUrl($merchant), ['amount_minor' => 10_000, 'payment_method' => 'dana_wallet', 'return_context' => $returnContext], ['Idempotency-Key' => 'sandbox-tester-transaction-001'])
             ->assertCreated()
             ->assertJsonPath('data.environment', 'sandbox')
             ->assertJsonPath('data.authentication.status', 'confirmed_by_checkout_response')

@@ -35,6 +35,16 @@ class DanaCredentialResolver
             notificationUrl: $credentials['notification_url'],
             returnUrl: $config->callback_url,
             mcc: $credentials['mcc'],
+            externalStoreId: $this->optionalCredential($credentials, 'external_store_id'),
+            subMerchantId: $this->optionalCredential($credentials, 'sub_merchant_id'),
         );
+    }
+
+    /** @param array<string, mixed> $credentials */
+    private function optionalCredential(array $credentials, string $field): ?string
+    {
+        $value = $credentials[$field] ?? null;
+
+        return is_string($value) && trim($value) !== '' ? $value : null;
     }
 }

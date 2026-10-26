@@ -14,5 +14,7 @@ class DanaCredentials
         public string $notificationUrl,
         public string $returnUrl,
         public string $mcc,
+        public ?string $externalStoreId,
+        public ?string $subMerchantId,
     ) {}
 }

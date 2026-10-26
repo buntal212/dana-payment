@@ -143,6 +143,9 @@ class PaymentAuditController extends Controller
     /** @return array<string, mixed> */
     private function payment(Payment $payment, bool $withTimeline = false): array
     {
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $paymentMethod = $metadata['udev_sandbox_payment_method'] ?? null;
+
         $data = [
             'id' => $payment->public_id,
             'merchant_reference' => $payment->merchant_order_id,
@@ -150,6 +153,9 @@ class PaymentAuditController extends Controller
             'amount_minor' => $payment->amount_minor,
             'currency' => $payment->currency,
             'status' => $payment->status,
+            'payment_method' => in_array($paymentMethod, ['dana_wallet', 'qris', 'va_bri', 'va_pani', 'va_cimb', 'va_btpn'], true)
+                ? $paymentMethod
+                : null,
             'created_at' => $payment->created_at?->toIso8601String(),
             'updated_at' => $payment->updated_at?->toIso8601String(),
             'gateway_verified_at' => $payment->paid_at?->toIso8601String(),

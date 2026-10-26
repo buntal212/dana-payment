@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\DanaSandboxPaymentMethod;
 use App\Models\DanaSandboxTestRun;
 use App\Models\Merchant;
 use App\Models\MerchantPaymentConfig;
@@ -49,11 +50,12 @@ class DanaSandboxTesterService
     }
 
     /**
-     * @param  array{amount_minor: int, idempotency_key: string, return_context: ?string}  $attributes
+     * @param  array{amount_minor: int, payment_method: string, idempotency_key: string, return_context: ?string}  $attributes
      * @return array<string, mixed>
      */
     public function createTransaction(Merchant $merchant, array $attributes, string $serviceId): array
     {
+        $paymentMethod = DanaSandboxPaymentMethod::from($attributes['payment_method']);
         $config = $this->sandboxConfiguration($merchant, $serviceId);
         $validation = $this->configurationValidation($config);
         if ($validation['format_valid'] !== true) {
@@ -82,7 +84,10 @@ class DanaSandboxTesterService
             ? $attributes['return_context']
             : $this->returnContext($payment);
 
-        $metadata = ['udev_sandbox_tester' => true];
+        $metadata = [
+            'udev_sandbox_tester' => true,
+            'udev_sandbox_payment_method' => $paymentMethod->value,
+        ];
         if ($returnContext !== null) {
             $metadata['udev_sandbox_return_context'] = $returnContext;
         }
@@ -262,9 +267,12 @@ class DanaSandboxTesterService
         return 'UDEV-SANDBOX-'.Str::upper(substr(hash('sha256', $idempotencyKey), 0, 40));
     }
 
-    /** @return array<string, bool|int|string|null> */
+    /** @return array<string, mixed> */
     private function paymentData(Payment $payment, ?string $checkoutUrl): array
     {
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $instruction = $metadata['udev_sandbox_payment_instruction'] ?? null;
+
         return [
             'id' => $payment->public_id,
             'merchant_order_id' => $payment->merchant_order_id,
@@ -273,6 +281,8 @@ class DanaSandboxTesterService
             'status' => $payment->status,
             'checkout_url' => $checkoutUrl,
             'checkout_available' => $checkoutUrl !== null,
+            'expires_at' => $payment->expires_at?->toIso8601String(),
+            'payment_instruction' => is_array($instruction) ? $instruction : null,
             'created_at' => $payment->created_at?->toIso8601String(),
             'updated_at' => $payment->updated_at?->toIso8601String(),
         ];
@@ -287,13 +297,14 @@ class DanaSandboxTesterService
             : null;
     }
 
-    /** @param array{amount_minor: int, idempotency_key: string, return_context: ?string} $attributes */
+    /** @param array{amount_minor: int, payment_method: string, idempotency_key: string, return_context: ?string} $attributes */
     private function matchesExistingTransaction(Payment $payment, array $attributes): bool
     {
         return $payment->amount_minor === $attributes['amount_minor']
             && $payment->currency === 'IDR'
             && is_array($payment->metadata)
-            && ($payment->metadata['udev_sandbox_tester'] ?? false) === true;
+            && ($payment->metadata['udev_sandbox_tester'] ?? false) === true
+            && ($payment->metadata['udev_sandbox_payment_method'] ?? null) === $attributes['payment_method'];
     }
 
     private function returnContext(Payment $payment): ?string

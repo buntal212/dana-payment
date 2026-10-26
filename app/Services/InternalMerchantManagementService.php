@@ -98,6 +98,8 @@ class InternalMerchantManagementService
                 'merchant_id' => $credentials['merchant_id'] ?? null,
                 'origin' => $credentials['origin'] ?? null,
                 'channel_id' => $credentials['channel_id'] ?? null,
+                'external_store_id' => $credentials['external_store_id'] ?? null,
+                'sub_merchant_id' => $credentials['sub_merchant_id'] ?? null,
                 'notification_url' => $credentials['notification_url'] ?? null,
                 'callback_url' => $config->callback_url,
                 'mcc' => $credentials['mcc'] ?? null,
@@ -109,7 +111,7 @@ class InternalMerchantManagementService
     }
 
     /**
-     * @param  array{environment: string, idempotency_key: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, notification_url: string, callback_url: string, mcc: string, enabled: bool}  $attributes
+     * @param  array{environment: string, idempotency_key: string, partner_id: string, merchant_id: string, private_key: string, dana_webhook_public_key: string, origin: string, channel_id: string, external_store_id?: string|null, sub_merchant_id?: string|null, notification_url: string, callback_url: string, mcc: string, enabled: bool}  $attributes
      * @return array{result: array<string, mixed>, was_idempotent_replay: bool}
      */
     public function configureDanaSandbox(Merchant $merchant, array $attributes, string $serviceId): array
@@ -159,6 +161,8 @@ class InternalMerchantManagementService
                     'dana_webhook_public_key' => $webhookPublicKey,
                     'origin' => $attributes['origin'],
                     'channel_id' => $attributes['channel_id'],
+                    'external_store_id' => $this->optionalCredentialForUpdate($attributes, $existingCredentials, 'external_store_id'),
+                    'sub_merchant_id' => $this->optionalCredentialForUpdate($attributes, $existingCredentials, 'sub_merchant_id'),
                     'notification_url' => $attributes['notification_url'],
                     'mcc' => $attributes['mcc'],
                 ],
@@ -438,6 +442,18 @@ class InternalMerchantManagementService
         $value = $attributes[$field] ?? $existingCredentials[$field] ?? null;
 
         return is_string($value) && trim($value) !== '' ? $value : null;
+    }
+
+    /** @param array<string, mixed> $attributes @param array<string, mixed> $existingCredentials */
+    private function optionalCredentialForUpdate(array $attributes, array $existingCredentials, string $field): ?string
+    {
+        if (array_key_exists($field, $attributes)) {
+            $value = $attributes[$field];
+
+            return is_string($value) && trim($value) !== '' ? $value : null;
+        }
+
+        return $this->credentialForUpdate($attributes, $existingCredentials, $field);
     }
 
     /** @param array<string, mixed> $attributes
