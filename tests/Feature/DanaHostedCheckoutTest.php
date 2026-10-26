@@ -101,6 +101,30 @@ class DanaHostedCheckoutTest extends TestCase
         app(DanaPaymentGateway::class)->startCheckout($payment, $merchant->paymentConfigs()->firstOrFail());
     }
 
+    public function test_udev_billing_checkout_appends_verified_public_id_reference_to_return_url(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'merchant_order_id' => 'udev-billing-order-001',
+            'metadata' => [
+                'udev_invoice_id' => 123,
+                'udev_payment_attempt_id' => 456,
+                'invoice_number' => 'INV-202610-001',
+            ],
+        ]);
+        Http::fake(function (HttpRequest $request) use ($payment): array {
+            $this->assertSame(
+                'https://merchant.example/payment-return?reference='.$payment->public_id,
+                $request->data()['urlParams'][0]['url'],
+            );
+
+            return ['responseCode' => '2005400', 'referenceNo' => 'DANA-ORDER-UDEV-RESULT', 'webRedirectUrl' => 'https://checkout.sandbox.dana.id/session/udev-result'];
+        });
+
+        $result = app(DanaPaymentGateway::class)->startCheckout($payment, $merchant->paymentConfigs()->firstOrFail());
+        $this->assertSame('https://checkout.sandbox.dana.id/session/udev-result', $result['checkout_url']);
+    }
+
     public function test_sandbox_custom_checkout_only_uses_the_documented_wallet_qris_and_va_options(): void
     {
         [$merchant] = $this->merchantWithDanaConfig();

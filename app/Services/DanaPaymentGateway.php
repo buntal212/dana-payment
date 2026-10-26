@@ -287,15 +287,33 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         $context = is_array($metadata) ? ($metadata['udev_sandbox_return_context'] ?? null) : null;
         $isSandboxTester = is_array($metadata) && ($metadata['udev_sandbox_tester'] ?? false) === true;
 
-        if (! $isSandboxTester || ! is_string($context) || preg_match('/\A[A-Za-z0-9_-]{43}\z/', $context) !== 1) {
-            return $configuredReturnUrl;
+        if ($isSandboxTester) {
+            if (! is_string($context) || preg_match('/\A[A-Za-z0-9_-]{43}\z/', $context) !== 1) {
+                return $configuredReturnUrl;
+            }
+
+            if (! filter_var($configuredReturnUrl, FILTER_VALIDATE_URL) || ! str_starts_with(strtolower($configuredReturnUrl), 'https://')) {
+                throw new \LogicException('PAY_RETURN Sandbox tidak valid.');
+            }
+
+            return $configuredReturnUrl.(str_contains($configuredReturnUrl, '?') ? '&' : '?').'context='.rawurlencode($context);
         }
 
-        if (! filter_var($configuredReturnUrl, FILTER_VALIDATE_URL) || ! str_starts_with(strtolower($configuredReturnUrl), 'https://')) {
-            throw new \LogicException('PAY_RETURN Sandbox tidak valid.');
+        $isUdevBilling = is_array($metadata) && (! empty($metadata['udev_invoice_id']) || ! empty($metadata['udev_payment_attempt_id']));
+        if ($isUdevBilling) {
+            $reference = (string) $payment->public_id;
+            if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $reference) === 1
+                && filter_var($configuredReturnUrl, FILTER_VALIDATE_URL)
+                && str_starts_with(strtolower($configuredReturnUrl), 'https://')
+                && ! str_contains($configuredReturnUrl, 'reference=')
+            ) {
+                $separator = str_contains($configuredReturnUrl, '?') ? '&' : '?';
+
+                return $configuredReturnUrl.$separator.'reference='.rawurlencode($reference);
+            }
         }
 
-        return $configuredReturnUrl.(str_contains($configuredReturnUrl, '?') ? '&' : '?').'context='.rawurlencode($context);
+        return $configuredReturnUrl;
     }
 
     private function logResponseDiagnostics(Payment $payment, Response $response, mixed $responseBody): void
