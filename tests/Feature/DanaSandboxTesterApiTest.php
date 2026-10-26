@@ -143,6 +143,60 @@ class DanaSandboxTesterApiTest extends TestCase
         });
     }
 
+    public function test_transaction_retry_with_identical_idempotency_key_reuses_checkout_without_second_create_order(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        $idempotencyKey = 'sandbox-tester-retry-identical-001';
+        $payload = ['amount_minor' => 10_000, 'payment_method' => 'dana_wallet', 'return_context' => str_repeat('R', 43)];
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/*' => Http::response([
+                'responseCode' => '2005400',
+                'referenceNo' => 'DANA-SANDBOX-RETRY-001',
+                'webRedirectUrl' => 'https://checkout.sandbox.dana.id/session/retry-001',
+            ]),
+        ]);
+
+        $first = $this->withToken(self::ServiceToken)
+            ->postJson($this->transactionUrl($merchant), $payload, ['Idempotency-Key' => $idempotencyKey])
+            ->assertCreated();
+        $second = $this->withToken(self::ServiceToken)
+            ->postJson($this->transactionUrl($merchant), $payload, ['Idempotency-Key' => $idempotencyKey])
+            ->assertCreated();
+
+        $this->assertSame($first->json('data.transaction.id'), $second->json('data.transaction.id'));
+        $this->assertDatabaseCount('payments', 1);
+        Http::assertSentCount(1);
+    }
+
+    public function test_transaction_retry_with_changed_payload_is_rejected_without_second_create_order(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        $idempotencyKey = 'sandbox-tester-retry-changed-001';
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/*' => Http::response([
+                'responseCode' => '2005400',
+                'referenceNo' => 'DANA-SANDBOX-CHANGED-001',
+                'webRedirectUrl' => 'https://checkout.sandbox.dana.id/session/changed-001',
+            ]),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->transactionUrl($merchant), ['amount_minor' => 10_000, 'payment_method' => 'dana_wallet'], ['Idempotency-Key' => $idempotencyKey])
+            ->assertCreated();
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->transactionUrl($merchant), ['amount_minor' => 20_000, 'payment_method' => 'dana_wallet'], ['Idempotency-Key' => $idempotencyKey])
+            ->assertUnprocessable()
+            ->assertJsonPath('message', 'Idempotency-Key sudah digunakan untuk transaksi Sandbox yang berbeda.');
+
+        $this->assertDatabaseCount('payments', 1);
+        Http::assertSentCount(1);
+    }
+
     public function test_qris_rejects_missing_external_store_before_calling_dana(): void
     {
         $merchant = $this->managedMerchant();
