@@ -173,6 +173,15 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         $responseBody = $response->json();
         $this->logResponseDiagnostics($payment, $response, $responseBody);
         if (! $response->successful() || ! is_array($responseBody) || ($responseBody['responseCode'] ?? null) !== '2005400' || ! is_string($responseBody['referenceNo'] ?? null)) {
+            Log::warning('DANA Custom Checkout Sandbox ditolak atau merespons tidak lengkap.', [
+                'payment_id' => $payment->getKey(),
+                'merchant_id' => $payment->merchant_id,
+                'payment_method' => $paymentMethod->value,
+                'http_status' => $response->status(),
+                'response_code' => is_array($responseBody) ? ($responseBody['responseCode'] ?? null) : null,
+                'request_id' => $response->header('X-Request-ID') ?? $response->header('Request-Id'),
+            ]);
+
             throw new RuntimeException('Checkout DANA Sandbox belum dapat dibuat.');
         }
 

@@ -143,6 +143,26 @@ class DanaSandboxTesterApiTest extends TestCase
         });
     }
 
+    public function test_qris_rejects_missing_external_store_before_calling_dana(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->transactionUrl($merchant), ['amount_minor' => 10_000, 'payment_method' => 'qris'], ['Idempotency-Key' => 'sandbox-tester-qris-no-store-001'])
+            ->assertUnprocessable()
+            ->assertJsonPath('message', 'QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.');
+
+        Http::assertNothingSent();
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->id,
+            'operation' => 'transaction_created',
+            'status' => 'failed',
+            'message' => 'QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.',
+        ]);
+    }
+
     public function test_status_and_history_are_isolated_to_sandbox_tester_payments_of_the_managed_merchant(): void
     {
         $merchant = $this->managedMerchant(['code' => 'udev-one']);

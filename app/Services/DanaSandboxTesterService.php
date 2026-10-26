@@ -70,6 +70,19 @@ class DanaSandboxTesterService
             throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk membuat transaksi uji.');
         }
 
+        $credentials = is_array($config?->encrypted_credentials) ? $config->encrypted_credentials : [];
+        if ($paymentMethod->requiresExternalStore() && ! $this->configured($credentials['external_store_id'] ?? null)) {
+            $this->recordRun(
+                $merchant,
+                'transaction_created',
+                'failed',
+                'QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.',
+                ['payment_method' => $paymentMethod->value, 'external_store_configured' => false],
+            );
+
+            throw new UnprocessableEntityHttpException('QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.');
+        }
+
         $merchantOrderId = $this->testerOrderId($attributes['idempotency_key']);
         $payment = Payment::query()
             ->forMerchant($merchant)
