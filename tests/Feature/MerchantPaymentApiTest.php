@@ -89,8 +89,12 @@ class MerchantPaymentApiTest extends TestCase
         $this->withToken($apiKey)->postJson('/api/v1/payments', $payload, ['Idempotency-Key' => 'idempotency-a'])->assertSuccessful();
         $this->assertDatabaseCount('payments', 1);
 
-        $this->withToken($apiKey)->postJson('/api/v1/payments', [...$payload, 'amount_minor' => 20_000], ['Idempotency-Key' => 'idempotency-a'])->assertStatus(409);
-        $this->withToken($apiKey)->postJson('/api/v1/payments', $payload, ['Idempotency-Key' => 'idempotency-b'])->assertStatus(409);
+        $this->withToken($apiKey)->postJson('/api/v1/payments', [...$payload, 'amount_minor' => 20_000], ['Idempotency-Key' => 'idempotency-a'])
+            ->assertStatus(409)
+            ->assertJsonPath('message', 'Idempotency-Key sudah digunakan untuk payload yang berbeda.');
+        $this->withToken($apiKey)->postJson('/api/v1/payments', $payload, ['Idempotency-Key' => 'idempotency-b'])
+            ->assertStatus(409)
+            ->assertJsonPath('message', 'merchant_order_id sudah digunakan.');
     }
 
     public function test_amount_currency_and_merchant_controlled_status_are_validated(): void

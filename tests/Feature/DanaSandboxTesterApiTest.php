@@ -197,6 +197,52 @@ class DanaSandboxTesterApiTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_each_supported_sandbox_method_creates_an_isolated_transaction_with_its_own_action_key(): void
+    {
+        $merchant = $this->managedMerchant();
+        $config = $this->validConfiguration($merchant);
+        $credentials = $config->encrypted_credentials;
+        $credentials['external_store_id'] = 'sandbox-store-001';
+        $config->update(['encrypted_credentials' => $credentials]);
+        $requests = [];
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) use (&$requests): array {
+            $requests[] = $request->data();
+            $payMethod = $request->data()['payOptionDetails'][0]['payMethod'] ?? null;
+
+            return [
+                'responseCode' => '2005400',
+                'referenceNo' => 'DANA-SANDBOX-METHOD-'.count($requests),
+                'webRedirectUrl' => $payMethod === 'BALANCE' ? 'https://checkout.sandbox.dana.id/session/method-'.count($requests) : null,
+                'additionalInfo' => $payMethod === 'BALANCE' ? [] : ['paymentCode' => 'PAYMENT-CODE-'.count($requests)],
+            ];
+        });
+        $methods = [
+            'dana_wallet' => ['BALANCE', ''],
+            'qris' => ['NETWORK_PAY', 'NETWORK_PAY_PG_QRIS'],
+            'va_bri' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_BRI'],
+            'va_pani' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_PANI'],
+            'va_cimb' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_CIMB'],
+            'va_btpn' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_BTPN'],
+        ];
+
+        foreach ($methods as $method => [$payMethod, $payOption]) {
+            $idempotencyKey = 'sandbox-tester-method-'.$method.'-001';
+            $payload = ['amount_minor' => 10_000, 'payment_method' => $method];
+
+            $first = $this->withToken(self::ServiceToken)
+                ->postJson($this->transactionUrl($merchant), $payload, ['Idempotency-Key' => $idempotencyKey])
+                ->assertCreated();
+            $this->assertSame($method, $first->json('data.transaction.payment_instruction.method'));
+            $request = $requests[array_key_last($requests)];
+            $this->assertSame($payMethod, $request['payOptionDetails'][0]['payMethod']);
+            $this->assertSame($payOption, $request['payOptionDetails'][0]['payOption']);
+        }
+
+        $this->assertDatabaseCount('payments', count($methods));
+        Http::assertSentCount(count($methods));
+    }
+
     public function test_qris_rejects_missing_external_store_before_calling_dana(): void
     {
         $merchant = $this->managedMerchant();

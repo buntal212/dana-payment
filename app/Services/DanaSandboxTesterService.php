@@ -11,6 +11,7 @@ use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 
 class DanaSandboxTesterService
@@ -114,6 +115,21 @@ class DanaSandboxTesterService
                 'metadata' => $metadata,
                 'idempotency_key' => $attributes['idempotency_key'],
             ], $this->paymentGateway);
+        } catch (ConflictHttpException $exception) {
+            $payment = Payment::query()
+                ->forMerchant($merchant)
+                ->where('merchant_order_id', $merchantOrderId)
+                ->first();
+            $this->recordRun(
+                $merchant,
+                'transaction_created',
+                'failed',
+                'Create Order Sandbox berkonflik dengan transaksi yang sudah ada.',
+                ['conflict_type' => $this->conflictType($exception)],
+                $payment,
+            );
+
+            throw $exception;
         } catch (\LogicException|\RuntimeException $exception) {
             $payment = Payment::query()
                 ->forMerchant($merchant)
@@ -363,6 +379,15 @@ class DanaSandboxTesterService
             && is_array($payment->metadata)
             && ($payment->metadata['udev_sandbox_tester'] ?? false) === true
             && ($payment->metadata['udev_sandbox_payment_method'] ?? null) === $attributes['payment_method'];
+    }
+
+    private function conflictType(ConflictHttpException $exception): string
+    {
+        return match ($exception->getMessage()) {
+            'Idempotency-Key sudah digunakan untuk payload yang berbeda.' => 'idempotency_payload_mismatch',
+            'merchant_order_id sudah digunakan.' => 'merchant_order_id',
+            default => 'storage',
+        };
     }
 
     private function returnContext(Payment $payment): ?string

@@ -62,7 +62,11 @@ class PaymentService
 
                 return $payment;
             }, 3);
-        } catch (QueryException) {
+        } catch (QueryException $exception) {
+            if (! $this->isUniqueConstraintViolation($exception)) {
+                throw $exception;
+            }
+
             $existing = Payment::query()
                 ->forMerchant($merchant)
                 ->where(function ($query) use ($attributes): void {
@@ -71,11 +75,21 @@ class PaymentService
                 })
                 ->first();
 
-            if ($existing !== null && $existing->idempotency_key === $attributes['idempotency_key'] && $this->hasSamePayload($existing, $attributes)) {
-                return $existing;
+            if ($existing !== null) {
+                if ($existing->idempotency_key === $attributes['idempotency_key']) {
+                    if ($this->hasSamePayload($existing, $attributes)) {
+                        return $existing;
+                    }
+
+                    throw new ConflictHttpException('Idempotency-Key sudah digunakan untuk payload yang berbeda.');
+                }
+
+                if ($existing->merchant_order_id === $attributes['merchant_order_id']) {
+                    throw new ConflictHttpException('merchant_order_id sudah digunakan.');
+                }
             }
 
-            throw new ConflictHttpException('merchant_order_id atau Idempotency-Key sudah digunakan.');
+            throw new ConflictHttpException('Konflik penyimpanan transaksi. Coba ulang dengan tindakan baru.');
         }
     }
 
@@ -168,6 +182,13 @@ class PaymentService
         unset($metadata['udev_sandbox_payment_instruction']);
 
         return $metadata;
+    }
+
+    private function isUniqueConstraintViolation(QueryException $exception): bool
+    {
+        $sqlState = $exception->errorInfo[0] ?? null;
+
+        return is_string($sqlState) && str_starts_with($sqlState, '23');
     }
 
     private function canonicalize(mixed $value): string
