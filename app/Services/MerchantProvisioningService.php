@@ -7,6 +7,7 @@ use App\Models\Merchant;
 use App\Models\MerchantProvisioningAudit;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class MerchantProvisioningService
@@ -115,8 +116,24 @@ class MerchantProvisioningService
             ->first();
 
         if ($request !== null && hash_equals($request->request_fingerprint, $fingerprint)) {
+            Log::info('Provisioning merchant menggunakan ulang mapping yang identik.', [
+                'merchant_id' => $merchant->getKey(),
+                'merchant_code' => $merchant->code,
+                'service_id' => $serviceId,
+                'environment' => $attributes['environment'],
+                'provisioning_request_id' => $request->getKey(),
+            ]);
+
             return $request->load('merchant');
         }
+
+        Log::warning('Provisioning merchant ditolak karena identitas mapping berbeda.', [
+            'merchant_id' => $merchant->getKey(),
+            'merchant_code' => $merchant->code,
+            'service_id' => $serviceId,
+            'environment' => $attributes['environment'],
+            'mapping_found_for_service_environment' => $request !== null,
+        ]);
 
         throw new ConflictHttpException('Kode merchant sudah digunakan oleh identitas atau environment berbeda.');
     }
