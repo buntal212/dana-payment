@@ -36,7 +36,13 @@ class DanaWebhookService
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
 
-        $payment = Payment::query()->where('provider', 'dana')->where('public_id', $payload['originalPartnerReferenceNo'])->first();
+        $payment = Payment::query()
+            ->where('provider', 'dana')
+            ->where(function ($query) use ($payload): void {
+                $query->where('partner_reference_no', $payload['originalPartnerReferenceNo'])
+                    ->orWhere('public_id', $payload['originalPartnerReferenceNo']);
+            })
+            ->first();
         if ($payment === null) {
             $this->recordRejected(null, $rawBody, 'payment_not_found');
 

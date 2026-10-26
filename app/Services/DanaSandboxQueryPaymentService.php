@@ -38,7 +38,7 @@ class DanaSandboxQueryPaymentService
 
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
         $payload = [
-            'originalPartnerReferenceNo' => $payment->public_id,
+            'originalPartnerReferenceNo' => $payment->partner_reference_no ?? $payment->public_id,
             'serviceCode' => '54',
             'merchantId' => $credentials->merchantId,
         ];

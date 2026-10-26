@@ -50,7 +50,11 @@ DANA_DIAGNOSTICS=false
 
 ## Alur
 
-`POST /api/v1/payments` membuat payment berstatus `pending`, kemudian meminta Create Order DANA dengan `partnerReferenceNo` berupa `payments.public_id`. Respons hanya disimpan bila `responseCode` adalah `2005400` dan memiliki `referenceNo` serta `webRedirectUrl`. Status tetap `pending` hingga Finish Notify tervalidasi.
+`POST /api/v1/payments` membuat payment berstatus `pending`, kemudian meminta Create Order DANA. Untuk Hosted Checkout dan transaksi lama, `partnerReferenceNo` memakai `payments.public_id`. Untuk QRIS Sandbox baru, gateway membuat token acak-deterministik sepanjang 25 karakter (`Q` + 24 karakter hash), menyimpannya pada `payments.partner_reference_no` sebelum request pertama, dan memakainya kembali untuk retry idempoten, Finish Notify, serta Query Payment. Respons hanya disimpan bila `responseCode` adalah `2005400` dan memiliki `referenceNo` serta instruksi yang dibutuhkan. Status tetap `pending` hingga Finish Notify tervalidasi.
+
+### QRIS Custom Checkout bukan QRIS MPM
+
+Respons Create Order Custom Checkout mendokumentasikan `additionalInfo.paymentCode` sebagai kode pembayaran. Nilai ini **bukan** `qrContent` QRIS MPM, sehingga UDEV menampilkannya sebagai kode yang dapat disalin, bukan sebagai gambar QRIS. Endpoint QRIS MPM Generate dan field `qrContent` tidak dipanggil atau dipetakan oleh integrasi ini. Akses merchant Sandbox terhadap produk MPM belum dapat dibuktikan tanpa melakukan Generate QRIS (yang akan membuat transaksi), sehingga integrasi MPM ditunda sampai kontrak dan entitlement resmi dikonfirmasi.
 
 Finish Notify divalidasi menggunakan public key DANA untuk konfigurasi merchant yang ditemukan dari `originalPartnerReferenceNo`, `provider`, dan `environment`. Aplikasi memeriksa `X-PARTNER-ID`, `merchantId`, signature SNAP, referensi DANA, nominal, currency, dan transisi status. Status `00` menjadi `paid`; status `05` menjadi `expired`.
 

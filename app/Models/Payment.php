@@ -15,7 +15,7 @@ class Payment extends Model
     use HasFactory;
 
     /** @var list<string> */
-    protected $fillable = ['public_id', 'merchant_id', 'merchant_order_id', 'provider', 'environment', 'provider_order_id', 'provider_transaction_id', 'amount_minor', 'currency', 'status', 'checkout_url', 'idempotency_key', 'expires_at', 'paid_at', 'failed_at', 'metadata'];
+    protected $fillable = ['public_id', 'partner_reference_no', 'merchant_id', 'merchant_order_id', 'provider', 'environment', 'provider_order_id', 'provider_transaction_id', 'amount_minor', 'currency', 'status', 'checkout_url', 'idempotency_key', 'expires_at', 'paid_at', 'failed_at', 'metadata'];
 
     protected function casts(): array
     {

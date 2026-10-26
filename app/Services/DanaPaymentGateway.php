@@ -39,7 +39,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
         $expiresAt = now('Asia/Jakarta')->addMinutes(30);
         $payload = [
-            'partnerReferenceNo' => $payment->public_id,
+            'partnerReferenceNo' => $this->partnerReferenceNo($payment),
             'merchantId' => $credentials->merchantId,
             'amount' => ['value' => $this->amountFormatter->formatIdr($payment->amount_minor), 'currency' => $payment->currency],
             'validUpTo' => $expiresAt->format('Y-m-d\\TH:i:sP'),
@@ -120,7 +120,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
         $expiresAt = now('Asia/Jakarta')->addMinutes(30);
         $payload = [
-            'partnerReferenceNo' => $payment->public_id,
+            'partnerReferenceNo' => $this->partnerReferenceNo($payment),
             'merchantId' => $credentials->merchantId,
             'amount' => ['value' => $this->amountFormatter->formatIdr($payment->amount_minor), 'currency' => $payment->currency],
             'validUpTo' => $expiresAt->format('Y-m-d\\TH:i:sP'),
@@ -218,17 +218,12 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         }
 
         if ($paymentMethod === DanaSandboxPaymentMethod::Qris) {
-            $qrImage = data_get($responseBody, 'additionalInfo.qrImage');
-            $qrUrl = data_get($responseBody, 'additionalInfo.qrUrl');
-
             return [
                 'method' => $paymentMethod->value,
                 'label' => $paymentMethod->label(),
-                'type' => 'qris',
+                'type' => 'payment_code',
                 'payment_code' => $paymentCode,
-                'qr_image' => is_string($qrImage) ? $qrImage : null,
-                'qr_url' => is_string($qrUrl) && filter_var($qrUrl, FILTER_VALIDATE_URL) !== false && str_starts_with(strtolower($qrUrl), 'https://') ? $qrUrl : null,
-                'message' => 'Scan QRIS atau gunakan kode QRIS yang diberikan DANA Sandbox.',
+                'message' => 'Kode pembayaran QRIS Custom Checkout. Bukan QR Content MPM dan tidak dirender sebagai QRIS.',
             ];
         }
 
@@ -246,6 +241,11 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         $method = is_array($payment->metadata) ? ($payment->metadata['udev_sandbox_payment_method'] ?? null) : null;
 
         return is_string($method) ? DanaSandboxPaymentMethod::tryFrom($method) : null;
+    }
+
+    private function partnerReferenceNo(Payment $payment): string
+    {
+        return $payment->partner_reference_no ?? $payment->public_id;
     }
 
     private function logRequestDiagnostics(Payment $payment, string $body, string $timestamp, string $signature, string $privateKey): void

@@ -31,8 +31,15 @@ class PaymentService
                     throw new ConflictHttpException('Idempotency-Key sudah digunakan untuk payload yang berbeda.');
                 }
 
+                $publicId = (string) Str::ulid();
+                $metadata = $attributes['metadata'] ?? null;
+                $isQrisSandbox = is_array($metadata) && ($metadata['udev_sandbox_payment_method'] ?? null) === 'qris';
                 $payment = Payment::query()->create([
-                    'public_id' => (string) Str::ulid(),
+                    'public_id' => $publicId,
+                    // QRIS Create Order membatasi partnerReferenceNo menjadi 25
+                    // karakter. Nilai ini dipersisten sebelum request pertama agar
+                    // retry idempoten dan webhook/query tetap menunjuk payment sama.
+                    'partner_reference_no' => $isQrisSandbox ? 'Q'.substr(hash('sha256', $publicId), 0, 24) : null,
                     'merchant_id' => $merchant->getKey(),
                     'merchant_order_id' => $attributes['merchant_order_id'],
                     'provider' => 'dana',
@@ -41,7 +48,7 @@ class PaymentService
                     'currency' => $attributes['currency'],
                     'status' => 'pending',
                     'idempotency_key' => $attributes['idempotency_key'],
-                    'metadata' => $attributes['metadata'] ?? null,
+                    'metadata' => $metadata,
                 ]);
 
                 PaymentEvent::query()->create([
@@ -145,7 +152,22 @@ class PaymentService
         return $payment->merchant_order_id === $attributes['merchant_order_id']
             && $payment->amount_minor === $attributes['amount_minor']
             && $payment->currency === $attributes['currency']
-            && $this->canonicalize($payment->metadata) === $this->canonicalize($attributes['metadata'] ?? null);
+            // Metadata instruksi checkout ditambahkan oleh gateway setelah
+            // request awal. Nilai internal itu bukan bagian payload merchant
+            // sehingga tidak boleh membuat retry dengan Idempotency-Key sama
+            // berubah menjadi konflik.
+            && $this->canonicalize($this->requestMetadata($payment->metadata)) === $this->canonicalize($attributes['metadata'] ?? null);
+    }
+
+    private function requestMetadata(mixed $metadata): mixed
+    {
+        if (! is_array($metadata)) {
+            return $metadata;
+        }
+
+        unset($metadata['udev_sandbox_payment_instruction']);
+
+        return $metadata;
     }
 
     private function canonicalize(mixed $value): string

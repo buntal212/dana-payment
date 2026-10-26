@@ -205,6 +205,7 @@ class DanaSandboxTesterApiTest extends TestCase
         $config->update(['encrypted_credentials' => $credentials]);
         $payment = Payment::factory()->for($merchant)->create([
             'status' => 'pending',
+            'partner_reference_no' => 'Q'.str_repeat('C', 24),
             'metadata' => ['udev_sandbox_tester' => true, 'udev_sandbox_payment_method' => 'qris'],
         ]);
         Http::preventStrayRequests();
@@ -242,7 +243,7 @@ class DanaSandboxTesterApiTest extends TestCase
                 && $request->hasHeader('X-SIGNATURE')
                 && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
                 && $request->hasHeader('CHANNEL-ID', 'channel-sandbox-001')
-                && ($payload['originalPartnerReferenceNo'] ?? null) === $payment->public_id
+                && ($payload['originalPartnerReferenceNo'] ?? null) === $payment->partner_reference_no
                 && ($payload['serviceCode'] ?? null) === '54'
                 && ($payload['merchantId'] ?? null) === 'merchant-sandbox-001'
                 && ($payload['externalStoreId'] ?? null) === 'sandbox-store-001';

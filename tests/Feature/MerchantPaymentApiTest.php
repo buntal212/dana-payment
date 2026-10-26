@@ -83,7 +83,7 @@ class MerchantPaymentApiTest extends TestCase
     public function test_duplicate_order_id_and_different_idempotency_payload_are_rejected(): void
     {
         [, $apiKey] = $this->merchantWithApiKey();
-        $payload = $this->paymentPayload();
+        $payload = [...$this->paymentPayload(), 'metadata' => ['order_note' => 'idempotent']];
 
         $this->withToken($apiKey)->postJson('/api/v1/payments', $payload, ['Idempotency-Key' => 'idempotency-a'])->assertSuccessful();
         $this->withToken($apiKey)->postJson('/api/v1/payments', $payload, ['Idempotency-Key' => 'idempotency-a'])->assertSuccessful();

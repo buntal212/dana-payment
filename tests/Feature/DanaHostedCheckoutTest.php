@@ -9,6 +9,7 @@ use App\Services\DanaAmountFormatter;
 use App\Services\DanaPaymentGateway;
 use App\Services\DanaSnapSignatureService;
 use App\Services\MerchantApiKeyService;
+use App\Services\PaymentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
@@ -121,7 +122,7 @@ class DanaHostedCheckoutTest extends TestCase
         });
         $methods = [
             'dana_wallet' => ['BALANCE', '', 'redirect'],
-            'qris' => ['NETWORK_PAY', 'NETWORK_PAY_PG_QRIS', 'qris'],
+            'qris' => ['NETWORK_PAY', 'NETWORK_PAY_PG_QRIS', 'payment_code'],
             'va_bri' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_BRI', 'virtual_account'],
             'va_pani' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_PANI', 'virtual_account'],
             'va_cimb' => ['VIRTUAL_ACCOUNT', 'VIRTUAL_ACCOUNT_CIMB', 'virtual_account'],
@@ -130,6 +131,7 @@ class DanaHostedCheckoutTest extends TestCase
 
         foreach ($methods as $method => [$payMethod, $payOption, $instructionType]) {
             $payment = Payment::factory()->for($merchant)->create([
+                'partner_reference_no' => $method === 'qris' ? 'Q'.str_repeat('A', 24) : null,
                 'metadata' => [
                     'udev_sandbox_tester' => true,
                     'udev_sandbox_payment_method' => $method,
@@ -145,7 +147,31 @@ class DanaHostedCheckoutTest extends TestCase
 
         $qrisRequest = $requests[1];
         $this->assertSame('sandbox-store-001', $qrisRequest['externalStoreId']);
-        $this->assertSame('API', $qrisRequest['additionalInfo']['order']['scenario']);
+        $this->assertSame('Q'.str_repeat('A', 24), $qrisRequest['partnerReferenceNo']);
+        $this->assertLessThanOrEqual(25, strlen($qrisRequest['partnerReferenceNo']));
+    }
+
+    public function test_qris_partner_reference_is_short_persisted_and_idempotent(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $attributes = [
+            'merchant_order_id' => 'qris-partner-reference-001',
+            'amount_minor' => 10_000,
+            'currency' => 'IDR',
+            'idempotency_key' => 'qris-partner-reference-key-001',
+            'metadata' => [
+                'udev_sandbox_tester' => true,
+                'udev_sandbox_payment_method' => 'qris',
+            ],
+        ];
+
+        $first = app(PaymentService::class)->createPending($merchant, $attributes);
+        $second = app(PaymentService::class)->createPending($merchant, $attributes);
+
+        $this->assertSame($first->id, $second->id);
+        $this->assertSame($first->partner_reference_no, $second->partner_reference_no);
+        $this->assertMatchesRegularExpression('/\AQ[A-Fa-f0-9]{24}\z/', (string) $first->partner_reference_no);
+        $this->assertLessThanOrEqual(25, strlen((string) $first->partner_reference_no));
     }
 
     public function test_invalid_signature_response_from_dana_does_not_create_a_checkout_or_mark_payment_paid(): void
@@ -198,6 +224,25 @@ class DanaHostedCheckoutTest extends TestCase
         $this->assertDatabaseCount('payment_webhooks', 1);
         $this->assertDatabaseCount('payment_events', 1);
         Log::shouldNotHaveReceived('warning');
+    }
+
+    public function test_qris_finish_notify_resolves_the_persisted_short_partner_reference(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'partner_reference_no' => 'Q'.str_repeat('B', 24),
+            'provider_order_id' => 'DANA-ORDER-QRIS-SHORT-REFERENCE',
+            'metadata' => [
+                'udev_sandbox_tester' => true,
+                'udev_sandbox_payment_method' => 'qris',
+            ],
+        ]);
+        $payload = $this->finishNotifyPayload($payment, '00');
+        $payload['originalPartnerReferenceNo'] = $payment->partner_reference_no;
+
+        $this->postWebhook($payload)->assertOk();
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'paid']);
     }
 
     public function test_finish_notify_without_original_partner_reference_is_rejected_without_changing_payment_status(): void
