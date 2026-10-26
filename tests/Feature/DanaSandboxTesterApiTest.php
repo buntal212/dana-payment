@@ -196,6 +196,59 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertDontSee('udev-two');
     }
 
+    public function test_query_payment_uses_signed_qris_sandbox_request_and_never_changes_local_status(): void
+    {
+        $merchant = $this->managedMerchant();
+        $config = $this->validConfiguration($merchant);
+        $credentials = $config->encrypted_credentials;
+        $credentials['external_store_id'] = 'sandbox-store-001';
+        $config->update(['encrypted_credentials' => $credentials]);
+        $payment = Payment::factory()->for($merchant)->create([
+            'status' => 'pending',
+            'metadata' => ['udev_sandbox_tester' => true, 'udev_sandbox_payment_method' => 'qris'],
+        ]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/status.htm' => Http::response([
+                'responseCode' => '2005500',
+                'latestTransactionStatus' => '00',
+                'requestID' => 'dana-query-001',
+            ]),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->danaStatusUrl($merchant, $payment))
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.payment_id', $payment->public_id)
+            ->assertJsonPath('data.local_status', 'pending')
+            ->assertJsonPath('data.dana_status.response_code', '2005500')
+            ->assertJsonPath('data.dana_status.latest_transaction_status', '00')
+            ->assertJsonPath('data.dana_status.request_id', 'dana-query-001');
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending', 'paid_at' => null]);
+        $this->assertDatabaseMissing('payment_events', ['payment_id' => $payment->id, 'event_type' => 'payment.status_changed']);
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'operation' => 'dana_payment_status_queried',
+            'status' => 'succeeded',
+        ]);
+        Http::assertSent(function (Request $request) use ($payment): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://dana-sandbox.test/payment-gateway/v1.0/debit/status.htm'
+                && $request->hasHeader('X-SIGNATURE')
+                && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
+                && $request->hasHeader('CHANNEL-ID', 'channel-sandbox-001')
+                && ($payload['originalPartnerReferenceNo'] ?? null) === $payment->public_id
+                && ($payload['serviceCode'] ?? null) === '54'
+                && ($payload['merchantId'] ?? null) === 'merchant-sandbox-001'
+                && ($payload['externalStoreId'] ?? null) === 'sandbox-store-001';
+        });
+    }
+
     private function managedMerchant(array $attributes = []): Merchant
     {
         $merchant = Merchant::factory()->create($attributes);
@@ -244,5 +297,10 @@ class DanaSandboxTesterApiTest extends TestCase
     private function transactionStatusUrl(Merchant $merchant, Payment $payment): string
     {
         return $this->transactionUrl($merchant)."/{$payment->public_id}/status";
+    }
+
+    private function danaStatusUrl(Merchant $merchant, Payment $payment): string
+    {
+        return $this->transactionUrl($merchant)."/{$payment->public_id}/dana-status";
     }
 }

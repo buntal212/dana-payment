@@ -21,6 +21,7 @@ class DanaSandboxTesterService
         private DanaKeyMaterialNormalizer $keyMaterialNormalizer,
         private PaymentService $paymentService,
         private PaymentGatewayInterface $paymentGateway,
+        private DanaSandboxQueryPaymentService $queryPaymentService,
     ) {}
 
     /** @return array<string, mixed> */
@@ -189,6 +190,50 @@ class DanaSandboxTesterService
         }
 
         return $result;
+    }
+
+    /** @return array<string, mixed> */
+    public function queryDanaPaymentStatus(Merchant $merchant, string $paymentPublicId, string $serviceId): array
+    {
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        if ($config === null) {
+            throw new \LogicException('Konfigurasi DANA Sandbox belum siap.');
+        }
+        $payment = Payment::query()
+            ->forMerchant($merchant)
+            ->where('public_id', $paymentPublicId)
+            ->where('environment', 'sandbox')
+            ->where('provider', 'dana')
+            ->whereJsonContains('metadata->udev_sandbox_tester', true)
+            ->first();
+        if ($payment === null) {
+            $this->paymentNotFound($paymentPublicId);
+        }
+
+        try {
+            $dana = $this->queryPaymentService->query($payment, $config);
+        } catch (\LogicException|\RuntimeException $exception) {
+            $this->recordRun($merchant, 'dana_payment_status_queried', 'failed', 'Status DANA Sandbox belum dapat diperiksa.', [], $payment);
+
+            throw $exception;
+        }
+
+        $this->recordRun(
+            $merchant,
+            'dana_payment_status_queried',
+            'succeeded',
+            'Status DANA Sandbox diperiksa tanpa mengubah status pembayaran lokal.',
+            collect($dana)->only(['http_status', 'response_code', 'latest_transaction_status', 'request_id'])->all(),
+            $payment,
+        );
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'payment_id' => $payment->public_id,
+            'local_status' => $payment->status,
+            'dana_status' => $dana,
+        ];
     }
 
     /** @return LengthAwarePaginator<int, DanaSandboxTestRun> */

@@ -60,6 +60,12 @@ class MerchantManagementController extends Controller
             ->header('Cache-Control', 'no-store');
     }
 
+    public function queryDanaSandboxPaymentStatus(Merchant $merchant, string $paymentId, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        return response()->json(['data' => $testerService->queryDanaPaymentStatus($merchant, $paymentId, $this->serviceId())])
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function danaSandboxTestHistory(Merchant $merchant, Request $request, DanaSandboxTesterService $testerService): JsonResponse
     {
         $validated = $request->validate(['per_page' => ['nullable', 'integer', 'min:1', 'max:50']]);

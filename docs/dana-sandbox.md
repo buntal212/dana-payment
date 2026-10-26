@@ -54,6 +54,12 @@ DANA_DIAGNOSTICS=false
 
 Finish Notify divalidasi menggunakan public key DANA untuk konfigurasi merchant yang ditemukan dari `originalPartnerReferenceNo`, `provider`, dan `environment`. Aplikasi memeriksa `X-PARTNER-ID`, `merchantId`, signature SNAP, referensi DANA, nominal, currency, dan transisi status. Status `00` menjadi `paid`; status `05` menjadi `expired`.
 
+## Query Payment Sandbox (diagnostik)
+
+Sandbox Tester menyediakan pemeriksaan read-only melalui `GET /api/v1/internal/merchants/{merchant}/sandbox-tester/transactions/{paymentId}/dana-status`. Layanan menandatangani `POST /payment-gateway/v1.0/debit/status.htm` dengan `serviceCode: "54"`, `originalPartnerReferenceNo`, dan `merchantId`; `externalStoreId` turut dikirim untuk QRIS. Respons aman memuat HTTP status DANA, `responseCode`, `latestTransactionStatus`, request ID, dan waktu cek.
+
+Query Payment tidak pernah mengubah `payments.status`, membuat event pembayaran, atau menggantikan Finish Notify. Status `paid` tetap hanya berasal dari Finish Notify yang signature dan identitasnya tervalidasi.
+
 `originalReferenceNo` diperlakukan sebagai referensi transaksi DANA, bukan ID event webhook: dokumentasi yang diaudit tidak menjamin nilai itu unik per pengiriman webhook. Karena itu `provider_event_id` dibiarkan `NULL`. Callback diserialkan dengan penguncian baris payment dan deduplikasi dilakukan berdasarkan SHA-256 dari payload mentah pada payment yang sama. Pembaruan status, event pembayaran, dan catatan webhook valid berada dalam satu transaksi database. Pengiriman ulang payload yang sama tidak menciptakan transisi kedua; retry setelah penolakan dapat diproses kembali.
 
 ## Redirect pelanggan dan path webhook

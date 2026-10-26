@@ -42,6 +42,9 @@ Route::prefix('v1/internal')->group(function (): void {
     Route::get('merchants/{merchant}/sandbox-tester/transactions/{paymentId}/status', [MerchantManagementController::class, 'danaSandboxTestTransactionStatus'])
         ->whereUlid('paymentId')
         ->middleware(['throttle:internal-service', 'internal:merchants:credentials:read', 'internal-https']);
+    Route::get('merchants/{merchant}/sandbox-tester/transactions/{paymentId}/dana-status', [MerchantManagementController::class, 'queryDanaSandboxPaymentStatus'])
+        ->whereUlid('paymentId')
+        ->middleware(['throttle:internal-service', 'internal:merchants:credentials:read', 'internal-https']);
     Route::get('merchants/{merchant}/payments/{paymentId}/audit', [PaymentAuditController::class, 'show'])
         ->whereUlid('paymentId')
         ->middleware(['throttle:internal-service', 'internal:payments:audit:read', 'internal-https']);
