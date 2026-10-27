@@ -346,6 +346,58 @@ class DanaSandboxTesterApiTest extends TestCase
         });
     }
 
+    public function test_debit_status_internal_server_error_uat_sends_service_code_az_and_expects_5005501(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/status.htm' => Http::response([
+                'responseCode' => '5005501',
+                'responseMessage' => 'Internal Server Error',
+            ], 500, ['X-Request-ID' => 'dana-server-err-001']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->debitStatusInternalServerErrorUatUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.merchant_code', $merchant->code)
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.uat.scenario', 'debit_status_internal_server_error')
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.expected.response_code', '5005501')
+            ->assertJsonPath('data.uat.expected.response_message', 'Internal Server Error')
+            ->assertJsonPath('data.uat.received.http_status', 500)
+            ->assertJsonPath('data.uat.received.response_code', '5005501')
+            ->assertJsonPath('data.uat.received.response_message', 'Internal Server Error')
+            ->assertJsonPath('data.uat.received.request_id', 'dana-server-err-001')
+            ->assertJsonPath('data.uat.request.service_code', 'AZ')
+            ->assertDontSee(DanaSandboxKeyMaterialFixture::PrivateKey);
+
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->id,
+            'operation' => 'debit_status_internal_server_error_tested',
+            'status' => 'succeeded',
+        ]);
+
+        Http::assertSent(function (Request $request): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://dana-sandbox.test/payment-gateway/v1.0/debit/status.htm'
+                && $request->hasHeader('X-SIGNATURE')
+                && $request->hasHeader('X-TIMESTAMP')
+                && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
+                && $request->hasHeader('CHANNEL-ID', 'channel-sandbox-001')
+                && str_starts_with($request->header('X-EXTERNAL-ID')[0] ?? '', 'status-uat-')
+                && is_string($payload['originalPartnerReferenceNo'] ?? null)
+                && ($payload['serviceCode'] ?? null) === 'AZ'
+                && ($payload['merchantId'] ?? null) === 'merchant-sandbox-001';
+        });
+    }
+
     public function test_arm_sandbox_webhook_simulated_500_arms_pending_transaction_and_stores_cache_key(): void
     {
         $merchant = $this->managedMerchant();
@@ -804,6 +856,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function debitStatusMissingTimestampUatUrl(Merchant $merchant): string
     {
         return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/debit-status-missing-timestamp";
+    }
+
+    private function debitStatusInternalServerErrorUatUrl(Merchant $merchant): string
+    {
+        return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/debit-status-internal-server-error";
     }
 
     private function armWebhook500UatUrl(Merchant $merchant): string

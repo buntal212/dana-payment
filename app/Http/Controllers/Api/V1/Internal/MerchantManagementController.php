@@ -78,6 +78,12 @@ class MerchantManagementController extends Controller
             ->header('Cache-Control', 'no-store');
     }
 
+    public function testDebitStatusInternalServerError(Merchant $merchant, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        return response()->json(['data' => $testerService->testDebitStatusInternalServerError($merchant, $this->serviceId())])
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function armDanaSandboxWebhookSimulated500(Merchant $merchant, Request $request, DanaSandboxTesterService $testerService): JsonResponse
     {
         $paymentId = $request->input('payment_id');

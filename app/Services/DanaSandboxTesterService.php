@@ -222,6 +222,64 @@ class DanaSandboxTesterService
     }
 
     /** @return array<string, mixed> */
+    public function testDebitStatusInternalServerError(Merchant $merchant, string $serviceId): array
+    {
+        $this->assertTesterCanAccessMerchant($merchant, $serviceId);
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        $validation = $this->configurationValidation($config);
+        if ($validation['format_valid'] !== true || $config === null) {
+            throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT Debit Status.');
+        }
+
+        try {
+            $result = $this->queryPaymentService->queryInternalServerError($config);
+        } catch (\LogicException|\RuntimeException $exception) {
+            $this->recordRun($merchant, 'debit_status_internal_server_error_tested', 'failed', 'Pemeriksaan UAT Debit Status belum dapat dieksekusi.', ['service_code' => 'AZ']);
+
+            throw $exception;
+        }
+
+        $responseCode = $result['response_code'] ?? null;
+        $passed = $responseCode === '5005501';
+
+        $this->recordRun(
+            $merchant,
+            'debit_status_internal_server_error_tested',
+            $passed ? 'succeeded' : 'failed',
+            $passed ? 'UAT Debit Status Internal Server Error (5005501) berhasil diverifikasi.' : 'UAT Debit Status Internal Server Error (5005501) tidak mengembalikan kode yang diharapkan.',
+            [
+                'service_code' => 'AZ',
+                'http_status' => $result['http_status'],
+                'response_code' => $responseCode,
+                'response_message' => $result['response_message'] ?? null,
+                'request_id' => $result['request_id'] ?? null,
+            ],
+        );
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'uat' => [
+                'scenario' => 'debit_status_internal_server_error',
+                'passed' => $passed,
+                'expected' => [
+                    'response_code' => '5005501',
+                    'response_message' => 'Internal Server Error',
+                ],
+                'received' => [
+                    'http_status' => $result['http_status'],
+                    'response_code' => $responseCode,
+                    'response_message' => $result['response_message'] ?? 'Tidak tersedia',
+                    'request_id' => $result['request_id'],
+                ],
+                'request' => [
+                    'service_code' => 'AZ',
+                ],
+            ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
     public function armWebhookSimulated500(Merchant $merchant, ?string $paymentPublicId, string $serviceId): array
     {
         $this->assertTesterCanAccessMerchant($merchant, $serviceId);
