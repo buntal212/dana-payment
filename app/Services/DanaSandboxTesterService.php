@@ -25,6 +25,7 @@ class DanaSandboxTesterService
         private PaymentGatewayInterface $paymentGateway,
         private DanaSandboxQueryPaymentService $queryPaymentService,
         private DanaSandboxCreateOrderUatService $createOrderUatService,
+        private DanaSandboxIpgCashierUatService $ipgCashierUatService,
     ) {}
 
     /** @return array<string, mixed> */
@@ -98,6 +99,40 @@ class DanaSandboxTesterService
             'merchant_code' => $merchant->code,
             'environment' => 'sandbox',
             'uat' => $this->createOrderUatService->inconsistentRequest($config),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function testIpgCreateOrderSuccess(Merchant $merchant, string $serviceId): array
+    {
+        $this->assertTesterCanAccessMerchant($merchant, $serviceId);
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        $validation = $this->configurationValidation($config);
+        if ($validation['format_valid'] !== true || $config === null) {
+            throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT IPG Cashier Pay.');
+        }
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'uat' => $this->ipgCashierUatService->createOrderSuccess($config),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function testIpgCreateOrderMissingTimestamp(Merchant $merchant, string $serviceId): array
+    {
+        $this->assertTesterCanAccessMerchant($merchant, $serviceId);
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        $validation = $this->configurationValidation($config);
+        if ($validation['format_valid'] !== true || $config === null) {
+            throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT IPG Cashier Pay.');
+        }
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'uat' => $this->ipgCashierUatService->missingTimestamp($config),
         ];
     }
 
