@@ -242,6 +242,26 @@ class InternalMerchantManagementApiTest extends TestCase
             ->assertConflict();
     }
 
+    public function test_external_store_id_is_preserved_for_qris_without_being_added_to_safe_audit_data(): void
+    {
+        $merchant = $this->managedMerchant();
+        $externalStoreId = 'sandbox-store-fixture-001';
+
+        $this->withToken(self::ServiceToken)
+            ->putJson($this->configurationUrl($merchant), $this->configurationPayload([
+                'idempotency_key' => 'configure-external-store-001',
+                'external_store_id' => $externalStoreId,
+            ]))
+            ->assertOk()
+            ->assertDontSee($externalStoreId);
+
+        $config = MerchantPaymentConfig::query()->sole();
+        $this->assertSame($externalStoreId, $config->encrypted_credentials['external_store_id']);
+
+        $auditPayload = json_encode(MerchantManagementAudit::query()->sole()->safe_details, JSON_THROW_ON_ERROR);
+        $this->assertStringNotContainsString($externalStoreId, $auditPayload);
+    }
+
     public function test_configuration_rejects_production_and_invalid_values_without_persisting(): void
     {
         $merchant = $this->managedMerchant();
