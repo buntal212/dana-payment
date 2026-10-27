@@ -218,6 +218,103 @@ class DanaHostedCheckoutTest extends TestCase
         $this->assertDatabaseHas('payments', ['merchant_id' => $merchant->id, 'merchant_order_id' => 'order-dana-invalid-signature', 'status' => 'pending', 'provider_order_id' => null, 'checkout_url' => null]);
     }
 
+    public function test_partial_qris_checkout_is_reconciled_then_recovered_with_the_same_payment_and_reference(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $config = $merchant->paymentConfigs()->firstOrFail();
+        $credentials = $config->encrypted_credentials;
+        $credentials['external_store_id'] = 'sandbox-store-recovery-001';
+        $config->update(['encrypted_credentials' => $credentials]);
+        $metadata = ['udev_sandbox_payment_method' => 'qris'];
+        $payment = Payment::factory()->for($merchant)->create([
+            'merchant_order_id' => 'invoice-13-attempt-11',
+            'partner_reference_no' => 'Q'.str_repeat('B', 24),
+            'provider_order_id' => 'DANA-PARTIAL-047',
+            'amount_minor' => 10_000,
+            'currency' => 'IDR',
+            'status' => 'pending',
+            'idempotency_key' => 'invoice-13-attempt-11-checkout',
+            'checkout_url' => null,
+            'expires_at' => null,
+            'metadata' => $metadata,
+        ]);
+        $requests = [];
+        Http::fake(function (HttpRequest $request) use (&$requests, $payment): array {
+            $requests[] = $request;
+
+            if (str_ends_with($request->url(), '/debit/status.htm')) {
+                $this->assertSame($payment->partner_reference_no, $request->data()['originalPartnerReferenceNo']);
+
+                return ['responseCode' => '2005500', 'latestTransactionStatus' => '01', 'requestID' => 'recovery-query-047'];
+            }
+
+            $this->assertSame($payment->partner_reference_no, $request->data()['partnerReferenceNo']);
+
+            return [
+                'responseCode' => '2005400',
+                'referenceNo' => 'DANA-PARTIAL-047',
+                'additionalInfo' => ['paymentCode' => 'QRIS-CODE-047'],
+            ];
+        });
+
+        $recovered = app(PaymentService::class)->createHostedCheckout($merchant, [
+            'merchant_order_id' => 'invoice-13-attempt-11',
+            'amount_minor' => 10_000,
+            'currency' => 'IDR',
+            'idempotency_key' => 'invoice-13-attempt-11-checkout',
+            'metadata' => $metadata,
+        ], app(DanaPaymentGateway::class));
+
+        $this->assertSame($payment->id, $recovered->id);
+        $this->assertSame('DANA-PARTIAL-047', $recovered->provider_order_id);
+        $this->assertSame('QRIS-CODE-047', $recovered->metadata['udev_sandbox_payment_instruction']['payment_code']);
+        $this->assertSame('pending', $recovered->status);
+        $this->assertDatabaseCount('payments', 1);
+        $this->assertDatabaseHas('payment_events', [
+            'payment_id' => $payment->id,
+            'event_type' => 'payment.checkout_recovery_checked',
+        ]);
+        $this->assertCount(2, $requests);
+    }
+
+    public function test_partial_checkout_does_not_retry_create_order_when_query_reports_paid(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'merchant_order_id' => 'invoice-13-attempt-11-paid',
+            'provider_order_id' => 'DANA-PARTIAL-PAID',
+            'amount_minor' => 10_000,
+            'currency' => 'IDR',
+            'status' => 'pending',
+            'idempotency_key' => 'invoice-13-attempt-11-paid-checkout',
+            'checkout_url' => null,
+            'expires_at' => null,
+            'metadata' => [],
+        ]);
+        $requests = [];
+        Http::fake(function (HttpRequest $request) use (&$requests): array {
+            $requests[] = $request;
+
+            return ['responseCode' => '2005500', 'latestTransactionStatus' => '00', 'requestID' => 'recovery-query-paid'];
+        });
+
+        try {
+            app(PaymentService::class)->createHostedCheckout($merchant, [
+                'merchant_order_id' => $payment->merchant_order_id,
+                'amount_minor' => 10_000,
+                'currency' => 'IDR',
+                'idempotency_key' => $payment->idempotency_key,
+                'metadata' => [],
+            ], app(DanaPaymentGateway::class));
+            $this->fail('Recovery seharusnya menunggu Finish Notify terverifikasi.');
+        } catch (\RuntimeException $exception) {
+            $this->assertStringContainsString('Finish Notify', $exception->getMessage());
+        }
+
+        $this->assertSame('pending', $payment->fresh()->status);
+        $this->assertCount(1, $requests);
+    }
+
     public function test_finish_notify_signature_uses_actual_callback_path_by_default(): void
     {
         $this->assertSame(self::DANA_CALLBACK_PATH, config('services.dana.webhook_relative_path'));
