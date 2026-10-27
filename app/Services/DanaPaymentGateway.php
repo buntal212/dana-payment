@@ -222,7 +222,9 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         }
 
         if ($paymentMethod === DanaSandboxPaymentMethod::Qris) {
-            $qr = $qrContent ?? (is_string($paymentCode) && str_starts_with(trim($paymentCode), '000201') ? trim($paymentCode) : null);
+            $qr = ($qrContent !== null && $this->isValidEmvcoQris($qrContent))
+                ? $qrContent
+                : (is_string($paymentCode) && $this->isValidEmvcoQris($paymentCode) ? trim($paymentCode) : null);
             if ($qr !== null) {
                 return [
                     'method' => $paymentMethod->value,
@@ -345,5 +347,67 @@ class DanaPaymentGateway implements PaymentGatewayInterface
             'response_code' => is_array($responseBody) ? ($responseBody['responseCode'] ?? null) : null,
             'request_id' => $response->header('X-Request-ID') ?? $response->header('Request-Id'),
         ]);
+    }
+
+    private function isValidEmvcoQris(?string $payload): bool
+    {
+        if (! is_string($payload) || strlen(trim($payload)) < 14 || ! str_starts_with(trim($payload), '000201')) {
+            return false;
+        }
+
+        $clean = trim($payload);
+        $len = strlen($clean);
+        $offset = 0;
+        $tlvs = [];
+
+        while ($offset < $len) {
+            if ($offset + 4 > $len) {
+                return false;
+            }
+            $tag = substr($clean, $offset, 2);
+            $lengthStr = substr($clean, $offset + 2, 2);
+            if (! ctype_digit($tag) || ! ctype_digit($lengthStr)) {
+                return false;
+            }
+            $valLen = (int) $lengthStr;
+            if ($offset + 4 + $valLen > $len) {
+                return false;
+            }
+            $val = substr($clean, $offset + 4, $valLen);
+            $tlvs[] = ['tag' => $tag, 'length' => $valLen, 'value' => $val];
+            $offset += 4 + $valLen;
+        }
+
+        if ($offset !== $len) {
+            return false;
+        }
+
+        $last = end($tlvs);
+        if ($last === false || $last['tag'] !== '63' || $last['length'] !== 4 || ! ctype_xdigit($last['value'])) {
+            return false;
+        }
+
+        $dataToCrc = substr($clean, 0, -4);
+        $expectedCrc = $this->crc16Ccitt($dataToCrc);
+
+        return strcasecmp($expectedCrc, $last['value']) === 0;
+    }
+
+    private function crc16Ccitt(string $str): string
+    {
+        $crc = 0xFFFF;
+        $len = strlen($str);
+        for ($i = 0; $i < $len; $i++) {
+            $crc ^= (ord($str[$i]) << 8);
+            for ($j = 0; $j < 8; $j++) {
+                if (($crc & 0x8000) !== 0) {
+                    $crc = (($crc << 1) ^ 0x1021) & 0xFFFF;
+                } else {
+                    $crc = ($crc << 1) & 0xFFFF;
+                }
+            }
+        }
+
+        return strtoupper(str_pad(dechex($crc), 4, '0', STR_PAD_LEFT));
     }
 }
