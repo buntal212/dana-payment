@@ -95,6 +95,39 @@ class DanaSandboxTesterApiTest extends TestCase
         ]);
     }
 
+    public function test_missing_timestamp_uat_uses_sandbox_credentials_without_creating_a_payment(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/payment-host-to-host.htm' => Http::response([
+                'responseCode' => '4005402',
+                'responseMessage' => 'Invalid Mandatory Field X-TIMESTAMP',
+            ], 400, ['X-Request-ID' => 'uat-missing-timestamp-001']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->missingTimestampUatUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.uat.scenario', 'create_order_missing_x_timestamp')
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.request.x_timestamp_sent', false)
+            ->assertJsonPath('data.uat.received.http_status', 400)
+            ->assertJsonPath('data.uat.received.response_code', '4005402')
+            ->assertJsonPath('data.uat.received.response_message', 'Invalid Mandatory Field X-TIMESTAMP')
+            ->assertJsonPath('data.uat.received.request_id', 'uat-missing-timestamp-001')
+            ->assertDontSee(DanaSandboxKeyMaterialFixture::PrivateKey);
+
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseCount('dana_sandbox_test_runs', 0);
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'POST'
+            && ! $request->hasHeader('X-TIMESTAMP')
+            && $request->hasHeader('X-SIGNATURE')
+            && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001'));
+    }
+
     public function test_creates_sandbox_checkout_through_existing_gateway_and_never_marks_it_paid(): void
     {
         $merchant = $this->managedMerchant();
@@ -393,6 +426,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function transactionUrl(Merchant $merchant): string
     {
         return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/transactions";
+    }
+
+    private function missingTimestampUatUrl(Merchant $merchant): string
+    {
+        return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/create-order-missing-timestamp";
     }
 
     private function transactionStatusUrl(Merchant $merchant, Payment $payment): string

@@ -23,6 +23,7 @@ class DanaSandboxTesterService
         private PaymentService $paymentService,
         private PaymentGatewayInterface $paymentGateway,
         private DanaSandboxQueryPaymentService $queryPaymentService,
+        private DanaSandboxCreateOrderUatService $createOrderUatService,
     ) {}
 
     /** @return array<string, mixed> */
@@ -48,6 +49,22 @@ class DanaSandboxTesterService
                 'status' => 'not_attempted',
                 'message' => 'Autentikasi DANA hanya dapat dikonfirmasi dari respons Create Order Sandbox yang valid.',
             ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function testCreateOrderMissingTimestamp(Merchant $merchant, string $serviceId): array
+    {
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        $validation = $this->configurationValidation($config);
+        if ($validation['format_valid'] !== true || $config === null) {
+            throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT Create Order.');
+        }
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'uat' => $this->createOrderUatService->missingTimestamp($config),
         ];
     }
 
