@@ -128,6 +128,40 @@ class DanaSandboxTesterApiTest extends TestCase
             && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001'));
     }
 
+    public function test_invalid_amount_format_uat_uses_sandbox_credentials_without_creating_a_payment(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/payment-host-to-host.htm' => Http::response([
+                'responseCode' => '4005401',
+                'responseMessage' => 'Invalid Field Format amount',
+            ], 400, ['X-Request-ID' => 'uat-invalid-amount-001']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->invalidAmountFormatUatUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.uat.scenario', 'create_order_invalid_amount_format')
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.request.amount_format_valid', false)
+            ->assertJsonPath('data.uat.received.http_status', 400)
+            ->assertJsonPath('data.uat.received.response_code', '4005401')
+            ->assertJsonPath('data.uat.received.response_message', 'Invalid Field Format amount')
+            ->assertJsonPath('data.uat.received.request_id', 'uat-invalid-amount-001')
+            ->assertDontSee(DanaSandboxKeyMaterialFixture::PrivateKey);
+
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseCount('dana_sandbox_test_runs', 0);
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'POST'
+            && $request->hasHeader('X-TIMESTAMP')
+            && $request->hasHeader('X-SIGNATURE')
+            && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
+            && json_decode($request->body(), true)['amount']['value'] === 'INVALID');
+    }
+
     public function test_creates_sandbox_checkout_through_existing_gateway_and_never_marks_it_paid(): void
     {
         $merchant = $this->managedMerchant();
@@ -431,6 +465,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function missingTimestampUatUrl(Merchant $merchant): string
     {
         return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/create-order-missing-timestamp";
+    }
+
+    private function invalidAmountFormatUatUrl(Merchant $merchant): string
+    {
+        return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/create-order-invalid-amount-format";
     }
 
     private function transactionStatusUrl(Merchant $merchant, Payment $payment): string

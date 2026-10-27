@@ -54,6 +54,12 @@ class MerchantManagementController extends Controller
             ->header('Cache-Control', 'no-store');
     }
 
+    public function testCreateOrderInvalidAmountFormat(Merchant $merchant, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        return response()->json(['data' => $testerService->testCreateOrderInvalidAmountFormat($merchant, $this->serviceId())])
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function createDanaSandboxTestTransaction(Merchant $merchant, StoreDanaSandboxTestTransactionRequest $request, DanaSandboxTesterService $testerService): JsonResponse
     {
         return response()->json(['data' => $testerService->createTransaction($merchant, $request->transactionAttributes(), $this->serviceId())], 201)
