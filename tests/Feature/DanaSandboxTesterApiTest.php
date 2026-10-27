@@ -523,6 +523,113 @@ class DanaSandboxTesterApiTest extends TestCase
         });
     }
 
+    public function test_query_payment_supports_dana_wallet_expired_sandbox_payment_and_remains_read_only(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        $payment = Payment::factory()->for($merchant)->create([
+            'status' => 'expired',
+            'partner_reference_no' => 'DW'.str_repeat('F', 23),
+            'metadata' => ['udev_sandbox_tester' => true, 'udev_sandbox_payment_method' => 'dana_wallet'],
+        ]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/status.htm' => Http::response([
+                'responseCode' => '2005500',
+                'latestTransactionStatus' => '05',
+                'requestID' => 'dana-wallet-query-005',
+            ]),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->danaStatusUrl($merchant, $payment))
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.payment_id', $payment->public_id)
+            ->assertJsonPath('data.local_status', 'expired')
+            ->assertJsonPath('data.dana_status.http_status', 200)
+            ->assertJsonPath('data.dana_status.response_code', '2005500')
+            ->assertJsonPath('data.dana_status.latest_transaction_status', '05')
+            ->assertJsonPath('data.dana_status.request_id', 'dana-wallet-query-005');
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'expired', 'paid_at' => null]);
+        $this->assertDatabaseMissing('payment_events', ['payment_id' => $payment->id]);
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'operation' => 'dana_payment_status_queried',
+            'status' => 'succeeded',
+        ]);
+        Http::assertSent(function (Request $request) use ($payment): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://dana-sandbox.test/payment-gateway/v1.0/debit/status.htm'
+                && $request->hasHeader('X-SIGNATURE')
+                && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
+                && $request->hasHeader('CHANNEL-ID', 'channel-sandbox-001')
+                && ($payload['originalPartnerReferenceNo'] ?? null) === $payment->partner_reference_no
+                && ($payload['serviceCode'] ?? null) === '54'
+                && ($payload['merchantId'] ?? null) === 'merchant-sandbox-001'
+                && ! array_key_exists('externalStoreId', $payload);
+        });
+    }
+
+    public function test_query_payment_supports_expired_sandbox_payment_with_cancelled_debit_status_05_and_never_mutates_local_status(): void
+    {
+        $merchant = $this->managedMerchant();
+        $config = $this->validConfiguration($merchant);
+        $credentials = $config->encrypted_credentials;
+        $credentials['external_store_id'] = 'sandbox-store-001';
+        $config->update(['encrypted_credentials' => $credentials]);
+        $payment = Payment::factory()->for($merchant)->create([
+            'status' => 'expired',
+            'partner_reference_no' => 'Q'.str_repeat('E', 24),
+            'metadata' => ['udev_sandbox_tester' => true, 'udev_sandbox_payment_method' => 'qris'],
+        ]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/status.htm' => Http::response([
+                'responseCode' => '2005500',
+                'latestTransactionStatus' => '05',
+                'requestID' => 'dana-query-expired-005',
+            ]),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->danaStatusUrl($merchant, $payment))
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.payment_id', $payment->public_id)
+            ->assertJsonPath('data.local_status', 'expired')
+            ->assertJsonPath('data.dana_status.http_status', 200)
+            ->assertJsonPath('data.dana_status.response_code', '2005500')
+            ->assertJsonPath('data.dana_status.latest_transaction_status', '05')
+            ->assertJsonPath('data.dana_status.request_id', 'dana-query-expired-005');
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'expired', 'paid_at' => null]);
+        $this->assertDatabaseMissing('payment_events', ['payment_id' => $payment->id]);
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'operation' => 'dana_payment_status_queried',
+            'status' => 'succeeded',
+        ]);
+        Http::assertSent(function (Request $request) use ($payment): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://dana-sandbox.test/payment-gateway/v1.0/debit/status.htm'
+                && $request->hasHeader('X-SIGNATURE')
+                && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
+                && $request->hasHeader('CHANNEL-ID', 'channel-sandbox-001')
+                && ($payload['originalPartnerReferenceNo'] ?? null) === $payment->partner_reference_no
+                && ($payload['serviceCode'] ?? null) === '54'
+                && ($payload['merchantId'] ?? null) === 'merchant-sandbox-001'
+                && ($payload['externalStoreId'] ?? null) === 'sandbox-store-001';
+        });
+    }
+
     private function managedMerchant(array $attributes = []): Merchant
     {
         $merchant = Merchant::factory()->create($attributes);
