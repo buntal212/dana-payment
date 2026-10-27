@@ -162,6 +162,23 @@ class PaymentAuditController extends Controller
         ];
 
         if ($withTimeline) {
+            $checkoutUrl = $this->safeCheckoutUrl($payment->checkout_url);
+            if ($checkoutUrl !== null) {
+                $data['checkout_url'] = $checkoutUrl;
+                $data['checkout_available'] = true;
+            } else {
+                $data['checkout_available'] = false;
+            }
+
+            if ($payment->expires_at !== null) {
+                $data['expires_at'] = $payment->expires_at->toIso8601String();
+            }
+
+            $instruction = $this->safePaymentInstruction($metadata['udev_sandbox_payment_instruction'] ?? null);
+            if ($instruction !== null) {
+                $data['payment_instruction'] = $instruction;
+            }
+
             $data['timeline'] = $payment->events->map(fn ($event): array => [
                 'event_type' => $event->event_type,
                 'old_status' => $event->old_status,
@@ -172,6 +189,51 @@ class PaymentAuditController extends Controller
         }
 
         return $data;
+    }
+
+    private function safeCheckoutUrl(?string $url): ?string
+    {
+        return is_string($url)
+            && filter_var($url, FILTER_VALIDATE_URL) !== false
+            && str_starts_with(strtolower($url), 'https://')
+            ? $url
+            : null;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function safePaymentInstruction(mixed $instruction): ?array
+    {
+        if (! is_array($instruction)) {
+            return null;
+        }
+
+        $allowedTypes = ['redirect', 'payment_code', 'virtual_account', 'qris_mpm'];
+        $type = $instruction['type'] ?? null;
+        if (! is_string($type) || ! in_array($type, $allowedTypes, true)) {
+            return null;
+        }
+
+        $safe = [
+            'type' => $type,
+        ];
+
+        if (is_string($instruction['method'] ?? null)) {
+            $safe['method'] = $instruction['method'];
+        }
+        if (is_string($instruction['label'] ?? null)) {
+            $safe['label'] = $instruction['label'];
+        }
+        if (is_string($instruction['message'] ?? null)) {
+            $safe['message'] = $instruction['message'];
+        }
+        if (is_string($instruction['payment_code'] ?? null)) {
+            $safe['payment_code'] = $instruction['payment_code'];
+        }
+        if (is_string($instruction['qr_content'] ?? null)) {
+            $safe['qr_content'] = $instruction['qr_content'];
+        }
+
+        return $safe;
     }
 
     /** @return array<string, int> */

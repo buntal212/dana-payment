@@ -186,9 +186,13 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         }
 
         $checkoutUrl = is_string($responseBody['webRedirectUrl'] ?? null) ? $responseBody['webRedirectUrl'] : null;
+        $qrContent = $responseBody['additionalInfo']['qrContent'] ?? ($responseBody['qrContent'] ?? null);
+        if (! is_string($qrContent) || trim($qrContent) === '') {
+            $qrContent = null;
+        }
         $paymentCode = $responseBody['additionalInfo']['paymentCode'] ?? null;
-        if (! is_string($paymentCode) || $paymentCode === '') {
-            $paymentCode = null;
+        if (! is_string($paymentCode) || trim($paymentCode) === '') {
+            $paymentCode = $qrContent;
         }
         if ($paymentMethod === DanaSandboxPaymentMethod::DanaWallet && $checkoutUrl === null) {
             throw new RuntimeException('Respons DANA Wallet Sandbox tidak menyediakan checkout URL.');
@@ -201,12 +205,12 @@ class DanaPaymentGateway implements PaymentGatewayInterface
             'provider_order_id' => $responseBody['referenceNo'],
             'checkout_url' => $checkoutUrl,
             'expires_at' => $expiresAt,
-            'payment_instruction' => $this->paymentInstruction($paymentMethod, $paymentCode, $responseBody),
+            'payment_instruction' => $this->paymentInstruction($paymentMethod, $paymentCode, $qrContent, $responseBody),
         ];
     }
 
     /** @param array<string, mixed> $responseBody @return array<string, mixed> */
-    private function paymentInstruction(DanaSandboxPaymentMethod $paymentMethod, ?string $paymentCode, array $responseBody): array
+    private function paymentInstruction(DanaSandboxPaymentMethod $paymentMethod, ?string $paymentCode, ?string $qrContent, array $responseBody): array
     {
         if ($paymentMethod === DanaSandboxPaymentMethod::DanaWallet) {
             return [
@@ -218,6 +222,18 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         }
 
         if ($paymentMethod === DanaSandboxPaymentMethod::Qris) {
+            $qr = $qrContent ?? (is_string($paymentCode) && str_starts_with(trim($paymentCode), '000201') ? trim($paymentCode) : null);
+            if ($qr !== null) {
+                return [
+                    'method' => $paymentMethod->value,
+                    'label' => $paymentMethod->label(),
+                    'type' => 'qris_mpm',
+                    'qr_content' => $qr,
+                    'payment_code' => $paymentCode ?? $qr,
+                    'message' => 'Pindai QRIS menggunakan aplikasi DANA atau aplikasi pembayaran pendukung QRIS.',
+                ];
+            }
+
             return [
                 'method' => $paymentMethod->value,
                 'label' => $paymentMethod->label(),

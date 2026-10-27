@@ -85,6 +85,41 @@ class PaymentAuditApiTest extends TestCase
             ->assertOk()->assertJsonPath('data.total', 2)->assertJsonPath('data.paid', 1)->assertJsonPath('data.paid_amounts.0.paid_amount_minor', 12000);
     }
 
+    public function test_returns_checkout_url_and_payment_instruction_when_present_on_pending_sandbox_payment(): void
+    {
+        $merchant = $this->managedMerchant();
+        $payment = Payment::factory()->for($merchant)->create([
+            'provider' => 'dana',
+            'environment' => 'sandbox',
+            'status' => 'pending',
+            'merchant_order_id' => 'UDEV-ORDER-PENDING',
+            'checkout_url' => 'https://checkout.sandbox.dana.id/session/test123',
+            'expires_at' => now()->addMinutes(15),
+            'metadata' => [
+                'udev_sandbox_payment_method' => 'qris',
+                'udev_sandbox_payment_instruction' => [
+                    'type' => 'qris_mpm',
+                    'method' => 'qris',
+                    'label' => 'QRIS',
+                    'message' => 'Pindai QRIS menggunakan aplikasi DANA atau aplikasi pembayaran pendukung QRIS.',
+                    'qr_content' => '00020101021226590014ID.DANA.WWW01189360091800000000005204581253033605802ID5911UDUMBARA DEV6007BANDUNG61054011562200716000000000000000000006304ABCD',
+                    'payment_code' => '00020101021226590014ID.DANA.WWW01189360091800000000005204581253033605802ID5911UDUMBARA DEV6007BANDUNG61054011562200716000000000000000000006304ABCD',
+                ],
+            ],
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->getJson($this->auditUrl($merchant, $payment))
+            ->assertOk()
+            ->assertJsonPath('data.id', $payment->public_id)
+            ->assertJsonPath('data.status', 'pending')
+            ->assertJsonPath('data.checkout_available', true)
+            ->assertJsonPath('data.checkout_url', 'https://checkout.sandbox.dana.id/session/test123')
+            ->assertJsonPath('data.payment_instruction.type', 'qris_mpm')
+            ->assertJsonPath('data.payment_instruction.qr_content', '00020101021226590014ID.DANA.WWW01189360091800000000005204581253033605802ID5911UDUMBARA DEV6007BANDUNG61054011562200716000000000000000000006304ABCD')
+            ->assertJsonPath('data.expires_at', $payment->expires_at->toIso8601String());
+    }
+
     private function managedMerchant(): Merchant
     {
         $merchant = Merchant::factory()->create();
