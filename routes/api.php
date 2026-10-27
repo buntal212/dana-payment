@@ -47,6 +47,8 @@ Route::prefix('v1/internal')->group(function (): void {
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::post('merchants/{merchant}/sandbox-tester/uat/debit-status-internal-server-error', [MerchantManagementController::class, 'testDebitStatusInternalServerError'])
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
+    Route::post('merchants/{merchant}/sandbox-tester/uat/debit-status-invalid-signature', [MerchantManagementController::class, 'testDebitStatusInvalidSignature'])
+        ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::post('merchants/{merchant}/sandbox-tester/uat/arm-webhook-500', [MerchantManagementController::class, 'armDanaSandboxWebhookSimulated500'])
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::get('merchants/{merchant}/sandbox-tester/transactions', [MerchantManagementController::class, 'danaSandboxTestHistory'])

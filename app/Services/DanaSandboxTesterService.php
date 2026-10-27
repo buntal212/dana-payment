@@ -280,6 +280,66 @@ class DanaSandboxTesterService
     }
 
     /** @return array<string, mixed> */
+    public function testDebitStatusInvalidSignature(Merchant $merchant, string $serviceId): array
+    {
+        $this->assertTesterCanAccessMerchant($merchant, $serviceId);
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        $validation = $this->configurationValidation($config);
+        if ($validation['format_valid'] !== true || $config === null) {
+            throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT Debit Status.');
+        }
+
+        try {
+            $result = $this->queryPaymentService->queryInvalidSignature($config);
+        } catch (\LogicException|\RuntimeException $exception) {
+            $this->recordRun($merchant, 'debit_status_invalid_signature_tested', 'failed', 'Pemeriksaan UAT Debit Status belum dapat dieksekusi.', ['signature_override' => 'invalid_signature']);
+
+            throw $exception;
+        }
+
+        $responseCode = $result['response_code'] ?? null;
+        $passed = $responseCode === '4015500';
+
+        $this->recordRun(
+            $merchant,
+            'debit_status_invalid_signature_tested',
+            $passed ? 'succeeded' : 'failed',
+            $passed ? 'UAT Debit Status Invalid Signature (4015500) berhasil diverifikasi.' : 'UAT Debit Status Invalid Signature (4015500) tidak mengembalikan kode yang diharapkan.',
+            [
+                'service_code' => '54',
+                'http_status' => $result['http_status'],
+                'response_code' => $responseCode,
+                'response_message' => $result['response_message'] ?? null,
+                'request_id' => $result['request_id'] ?? null,
+                'signature_override' => 'invalid_signature',
+            ],
+        );
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'uat' => [
+                'scenario' => 'debit_status_invalid_signature',
+                'passed' => $passed,
+                'expected' => [
+                    'response_code' => '4015500',
+                    'response_message' => 'Unauthorized',
+                ],
+                'received' => [
+                    'http_status' => $result['http_status'],
+                    'response_code' => $responseCode,
+                    'response_message' => $result['response_message'] ?? 'Tidak tersedia',
+                    'request_id' => $result['request_id'],
+                ],
+                'request' => [
+                    'service_code' => '54',
+                    'signature_override' => 'invalid_signature',
+                ],
+            ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
     public function armWebhookSimulated500(Merchant $merchant, ?string $paymentPublicId, string $serviceId): array
     {
         $this->assertTesterCanAccessMerchant($merchant, $serviceId);
