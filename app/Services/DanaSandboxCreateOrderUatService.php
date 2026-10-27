@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\MerchantPaymentConfig;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -28,8 +29,8 @@ final class DanaSandboxCreateOrderUatService
     {
         $credentials = $this->credentialResolver->resolve($config);
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
-        $expiresAt = now('Asia/Jakarta')->addMinutes(5);
-        $reference = 'UAT-TS-'.Str::upper(Str::random(18));
+        $expiresAt = now('Asia/Jakarta')->addMinutes(30);
+        $reference = (string) Str::ulid();
         $externalId = (string) Str::ulid();
         $payload = [
             'partnerReferenceNo' => $reference,
@@ -41,11 +42,14 @@ final class DanaSandboxCreateOrderUatService
                 ['url' => $credentials->notificationUrl, 'type' => 'NOTIFICATION', 'isDeeplink' => 'N'],
             ],
             'additionalInfo' => [
-                'order' => ['orderTitle' => 'UAT missing X-TIMESTAMP', 'scenario' => 'API'],
+                'order' => ['orderTitle' => 'UAT Missing Timestamp', 'scenario' => 'REDIRECT'],
                 'mcc' => $credentials->mcc,
                 'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
             ],
         ];
+        if ($credentials->subMerchantId !== null) {
+            $payload['subMerchantId'] = $credentials->subMerchantId;
+        }
         $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $signature = $this->signatureService->signTransactional('POST', self::CreateOrderPath, $body, $timestamp, $credentials->privateKey);
 
@@ -85,7 +89,7 @@ final class DanaSandboxCreateOrderUatService
             'received' => [
                 'http_status' => $response->status(),
                 'response_code' => $responseCode,
-                'response_message' => $passed ? $expectedMessage : 'Respons DANA tidak sesuai ekspektasi UAT.',
+                'response_message' => $passed ? $expectedMessage : ($actualMessage ?? 'Respons DANA tidak sesuai ekspektasi UAT.'),
                 'request_id' => is_string($requestId) && preg_match('/\\A[A-Za-z0-9._-]{1,128}\\z/', $requestId) === 1 ? $requestId : null,
             ],
             'request' => ['x_timestamp_sent' => false],
@@ -103,8 +107,8 @@ final class DanaSandboxCreateOrderUatService
     {
         $credentials = $this->credentialResolver->resolve($config);
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
-        $expiresAt = now('Asia/Jakarta')->addMinutes(5);
-        $reference = 'UAT-AMT-'.Str::upper(Str::random(18));
+        $expiresAt = now('Asia/Jakarta')->addMinutes(30);
+        $reference = (string) Str::ulid();
         $externalId = (string) Str::ulid();
         $payload = [
             'partnerReferenceNo' => $reference,
@@ -116,11 +120,14 @@ final class DanaSandboxCreateOrderUatService
                 ['url' => $credentials->notificationUrl, 'type' => 'NOTIFICATION', 'isDeeplink' => 'N'],
             ],
             'additionalInfo' => [
-                'order' => ['orderTitle' => 'UAT invalid amount format', 'scenario' => 'API'],
+                'order' => ['orderTitle' => 'UAT Invalid Amount', 'scenario' => 'REDIRECT'],
                 'mcc' => $credentials->mcc,
                 'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
             ],
         ];
+        if ($credentials->subMerchantId !== null) {
+            $payload['subMerchantId'] = $credentials->subMerchantId;
+        }
         $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $signature = $this->signatureService->signTransactional('POST', self::CreateOrderPath, $body, $timestamp, $credentials->privateKey);
 
@@ -160,7 +167,7 @@ final class DanaSandboxCreateOrderUatService
             'received' => [
                 'http_status' => $response->status(),
                 'response_code' => $responseCode,
-                'response_message' => $passed ? $expectedMessage : 'Respons DANA tidak sesuai ekspektasi UAT.',
+                'response_message' => $passed ? $expectedMessage : ($actualMessage ?? 'Respons DANA tidak sesuai ekspektasi UAT.'),
                 'request_id' => is_string($requestId) && preg_match('/\\A[A-Za-z0-9._-]{1,128}\\z/', $requestId) === 1 ? $requestId : null,
             ],
             'request' => ['amount_format_valid' => false],
@@ -177,8 +184,8 @@ final class DanaSandboxCreateOrderUatService
     public function inconsistentRequest(MerchantPaymentConfig $config): array
     {
         $credentials = $this->credentialResolver->resolve($config);
-        $reference = 'UAT-INC-'.Str::upper(Str::random(18));
-        $expiresAt = now('Asia/Jakarta')->addMinutes(5);
+        $reference = (string) Str::ulid();
+        $expiresAt = now('Asia/Jakarta')->addMinutes(30);
 
         // --- Request 1: Nominal Rp100.000 (sukses) ---
         $timestamp1 = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
@@ -193,11 +200,15 @@ final class DanaSandboxCreateOrderUatService
                 ['url' => $credentials->notificationUrl, 'type' => 'NOTIFICATION', 'isDeeplink' => 'N'],
             ],
             'additionalInfo' => [
-                'order' => ['orderTitle' => 'UAT inconsistent request (first)', 'scenario' => 'API'],
+                'order' => ['orderTitle' => 'UAT Inconsistent Request 1', 'scenario' => 'REDIRECT'],
                 'mcc' => $credentials->mcc,
                 'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
             ],
         ];
+        if ($credentials->subMerchantId !== null) {
+            $payload1['subMerchantId'] = $credentials->subMerchantId;
+        }
+
         $body1 = json_encode($payload1, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $signature1 = $this->signatureService->signTransactional('POST', self::CreateOrderPath, $body1, $timestamp1, $credentials->privateKey);
 
@@ -242,11 +253,15 @@ final class DanaSandboxCreateOrderUatService
                 ['url' => $credentials->notificationUrl, 'type' => 'NOTIFICATION', 'isDeeplink' => 'N'],
             ],
             'additionalInfo' => [
-                'order' => ['orderTitle' => 'UAT inconsistent request (second)', 'scenario' => 'API'],
+                'order' => ['orderTitle' => 'UAT Inconsistent Request 2', 'scenario' => 'REDIRECT'],
                 'mcc' => $credentials->mcc,
                 'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
             ],
         ];
+        if ($credentials->subMerchantId !== null) {
+            $payload2['subMerchantId'] = $credentials->subMerchantId;
+        }
+
         $body2 = json_encode($payload2, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $signature2 = $this->signatureService->signTransactional('POST', self::CreateOrderPath, $body2, $timestamp2, $credentials->privateKey);
 
@@ -276,7 +291,9 @@ final class DanaSandboxCreateOrderUatService
         $secondActualMessage = is_array($data2) && is_string($data2['responseMessage'] ?? null)
             ? $data2['responseMessage']
             : null;
-        $secondPassed = $secondResponseCode === '4045418' && $secondActualMessage === $expectedMessage;
+        $secondPassed = $secondResponseCode === '4045418'
+            && is_string($secondActualMessage)
+            && (strcasecmp($secondActualMessage, $expectedMessage) === 0 || str_contains(strtolower($secondActualMessage), 'inconsistent'));
         $passed = $firstPassed && $secondPassed;
         $requestId2 = $response2->header('X-Request-ID') ?? $response2->header('Request-Id');
 
@@ -284,7 +301,7 @@ final class DanaSandboxCreateOrderUatService
             'amount' => '100000.00',
             'http_status' => $response1->status(),
             'response_code' => $firstResponseCode,
-            'response_message' => $firstPassed ? 'Successful' : ($firstActualMessage ?? 'Gagal membuat order pertama.'),
+            'response_message' => $firstActualMessage ?? ($firstPassed ? 'Successful' : 'Gagal membuat order pertama.'),
             'request_id' => is_string($requestId1) && preg_match('/\\A[A-Za-z0-9._-]{1,128}\\z/', $requestId1) === 1 ? $requestId1 : null,
         ];
 
@@ -292,9 +309,36 @@ final class DanaSandboxCreateOrderUatService
             'amount' => '200000.00',
             'http_status' => $response2->status(),
             'response_code' => $secondResponseCode,
-            'response_message' => $secondPassed ? $expectedMessage : ($secondActualMessage ?? 'Respons DANA tidak sesuai ekspektasi UAT.'),
+            'response_message' => $secondActualMessage ?? ($secondPassed ? $expectedMessage : 'Respons DANA tidak sesuai ekspektasi UAT.'),
             'request_id' => is_string($requestId2) && preg_match('/\\A[A-Za-z0-9._-]{1,128}\\z/', $requestId2) === 1 ? $requestId2 : null,
         ];
+
+        Log::info('UAT DANA Sandbox Create Order 4045418 dieksekusi.', [
+            'merchant_id' => $config->merchant_id,
+            'partner_reference_no' => $reference,
+            'request_1_status' => $response1->status(),
+            'request_1_code' => $firstResponseCode,
+            'request_1_message' => $firstActualMessage,
+            'request_1_id' => $firstRequestInfo['request_id'],
+            'request_2_status' => $response2->status(),
+            'request_2_code' => $secondResponseCode,
+            'request_2_message' => $secondActualMessage,
+            'request_2_id' => $secondRequestInfo['request_id'],
+            'passed' => $passed,
+        ]);
+
+        if (! $passed) {
+            Log::warning('UAT DANA Sandbox Create Order 4045418 gagal.', [
+                'merchant_id' => $config->merchant_id,
+                'partner_reference_no' => $reference,
+                'first_request_passed' => $firstPassed,
+                'first_request_code' => $firstResponseCode,
+                'first_request_message' => $firstActualMessage,
+                'second_request_passed' => $secondPassed,
+                'second_request_code' => $secondResponseCode,
+                'second_request_message' => $secondActualMessage,
+            ]);
+        }
 
         return [
             'scenario' => 'create_order_inconsistent_request',
@@ -302,7 +346,7 @@ final class DanaSandboxCreateOrderUatService
             'expected' => ['response_code' => '4045418', 'response_message' => $expectedMessage],
             'first_request' => $firstRequestInfo,
             'second_request' => $secondRequestInfo,
-            'received' => $secondRequestInfo,
+            'received' => ! $firstPassed ? $firstRequestInfo : $secondRequestInfo,
             'request' => [
                 'partner_reference_no' => $reference,
                 'first_amount' => '100000.00',

@@ -169,9 +169,11 @@ class DanaSandboxTesterApiTest extends TestCase
         Http::preventStrayRequests();
 
         $callCount = 0;
+        $capturedRequests = [];
         Http::fake([
-            'https://dana-sandbox.test/payment-gateway/v1.0/debit/payment-host-to-host.htm' => function (Request $request) use (&$callCount) {
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/payment-host-to-host.htm' => function (Request $request) use (&$callCount, &$capturedRequests) {
                 $callCount++;
+                $capturedRequests[] = json_decode($request->body(), true);
                 if ($callCount === 1) {
                     return Http::response([
                         'responseCode' => '2005400',
@@ -201,6 +203,38 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertDontSee(DanaSandboxKeyMaterialFixture::PrivateKey);
 
         $this->assertSame(2, $callCount);
+        $this->assertSame($capturedRequests[0]['partnerReferenceNo'], $capturedRequests[1]['partnerReferenceNo']);
+        $this->assertMatchesRegularExpression('/^[0-9A-Z]{26}$/', $capturedRequests[0]['partnerReferenceNo']);
+        $this->assertSame('REDIRECT', $capturedRequests[0]['additionalInfo']['order']['scenario']);
+        $this->assertSame('REDIRECT', $capturedRequests[1]['additionalInfo']['order']['scenario']);
+        $this->assertSame('100000.00', $capturedRequests[0]['amount']['value']);
+        $this->assertSame('200000.00', $capturedRequests[1]['amount']['value']);
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseCount('dana_sandbox_test_runs', 0);
+    }
+
+    public function test_inconsistent_request_uat_safely_records_diagnostic_when_first_order_fails(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/payment-host-to-host.htm' => Http::response([
+                'responseCode' => '4005401',
+                'responseMessage' => 'Invalid Field Format',
+            ], 400, ['X-Request-ID' => 'uat-diag-err-001']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->inconsistentRequestUatUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.uat.passed', false)
+            ->assertJsonPath('data.uat.first_request.response_code', '4005401')
+            ->assertJsonPath('data.uat.first_request.response_message', 'Invalid Field Format')
+            ->assertJsonPath('data.uat.received.response_code', '4005401')
+            ->assertDontSee(DanaSandboxKeyMaterialFixture::PrivateKey);
+
         $this->assertDatabaseCount('payments', 0);
         $this->assertDatabaseCount('dana_sandbox_test_runs', 0);
     }
