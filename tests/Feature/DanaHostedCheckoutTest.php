@@ -12,6 +12,7 @@ use App\Services\MerchantApiKeyService;
 use App\Services\PaymentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Testing\TestResponse;
@@ -364,6 +365,239 @@ class DanaHostedCheckoutTest extends TestCase
         $this->postWebhook($payload)->assertOk();
 
         $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'paid']);
+    }
+
+    public function test_sandbox_webhook_simulated_500_responds_with_5005601_when_armed_and_leaves_payment_pending(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'provider_order_id' => 'DANA-ORDER-UAT-500',
+            'amount_minor' => 20_000,
+            'status' => 'pending',
+            'metadata' => ['udev_sandbox_tester' => true],
+        ]);
+        $payload = $this->finishNotifyPayload($payment, '00');
+        $cacheKey = "dana:uat:simulate_notify_500:merchant:{$merchant->id}:payment:{$payment->id}";
+        Cache::put($cacheKey, [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'payment_public_id' => $payment->public_id,
+        ], now()->addMinutes(10));
+
+        $response = $this->postWebhook($payload);
+
+        $response->assertStatus(500)
+            ->assertJsonPath('responseCode', '5005601')
+            ->assertJsonPath('responseMessage', 'Internal Server Error')
+            ->assertHeader('X-TIMESTAMP');
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
+        $this->assertDatabaseHas('payment_webhooks', [
+            'payment_id' => $payment->id,
+            'processing_status' => 'rejected',
+            'error_code' => 'uat_simulated_500',
+            'signature_valid' => true,
+        ]);
+    }
+
+    public function test_sandbox_webhook_simulated_500_is_single_use_and_subsequent_webhook_succeeds(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'provider_order_id' => 'DANA-ORDER-UAT-500-RETRY',
+            'amount_minor' => 15_000,
+            'status' => 'pending',
+            'metadata' => ['udev_sandbox_tester' => true],
+        ]);
+        $payload = $this->finishNotifyPayload($payment, '00');
+        $cacheKey = "dana:uat:simulate_notify_500:merchant:{$merchant->id}:payment:{$payment->id}";
+        Cache::put($cacheKey, [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'payment_public_id' => $payment->public_id,
+        ], now()->addMinutes(10));
+
+        // Request 1: Trigger 5005601
+        $this->postWebhook($payload)->assertStatus(500)->assertJsonPath('responseCode', '5005601');
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
+
+        // Request 2 (Retry DANA): Harus diproses normal karena single-use sudah dikonsumsi
+        $this->postWebhook($payload)->assertOk()->assertJsonPath('responseCode', '2005600');
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'paid']);
+
+        // Request 3 (Duplicate berikutnya): Idempotent dan deduplikasi processed mengembalikan 2005600
+        $this->postWebhook($payload)->assertOk()->assertJsonPath('responseCode', '2005600');
+        $this->assertDatabaseCount('payment_events', 1);
+    }
+
+    public function test_concurrent_parallel_webhooks_never_both_receive_500_with_database_cache_driver(): void
+    {
+        // Uji atomicity pada driver 'database' seperti konfigurasi HOMELAB
+        config(['cache.default' => 'database']);
+
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'provider_order_id' => 'DANA-ORDER-UAT-CONCURRENT-DB',
+            'amount_minor' => 25_000,
+            'status' => 'pending',
+            'metadata' => ['udev_sandbox_tester' => true],
+        ]);
+        $payload = $this->finishNotifyPayload($payment, '00');
+        $cacheKey = "dana:uat:simulate_notify_500:merchant:{$merchant->id}:payment:{$payment->id}";
+        Cache::put($cacheKey, [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'payment_public_id' => $payment->public_id,
+            'armed_at' => now()->toIso8601String(),
+        ], now()->addMinutes(10));
+
+        // Simulasikan request 1 dan request 2 yang tiba berurutan / paralel
+        $response1 = $this->postWebhook($payload);
+        $response2 = $this->postWebhook($payload);
+
+        // Tepat satu yang menerima 5005601 dan tepat satu yang menerima 2005600
+        $statusCodes = [$response1->status(), $response2->status()];
+        sort($statusCodes);
+        $this->assertSame([200, 500], $statusCodes);
+
+        $responseCodes = [
+            $response1->json('responseCode'),
+            $response2->json('responseCode'),
+        ];
+        sort($responseCodes);
+        $this->assertSame(['2005600', '5005601'], $responseCodes);
+
+        // Payment status akhir harus lunas (paid), bukan pending
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'paid']);
+
+        // Webhook audit harus mencatat tepat 1 rejected uat_simulated_500 dan 1 processed
+        $this->assertDatabaseHas('payment_webhooks', [
+            'payment_id' => $payment->id,
+            'processing_status' => 'rejected',
+            'error_code' => 'uat_simulated_500',
+        ]);
+        $this->assertDatabaseHas('payment_webhooks', [
+            'payment_id' => $payment->id,
+            'processing_status' => 'processed',
+            'error_code' => null,
+        ]);
+        $this->assertDatabaseCount('payment_events', 1);
+    }
+
+    public function test_concurrent_lock_held_forces_parallel_webhook_to_wait_and_process_normally(): void
+    {
+        // Uji skenario di mana Lock dipegang oleh request pertama:
+        // Request kedua yang menunggu tidak boleh ikut memicu 500
+        config(['cache.default' => 'database']);
+
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'provider_order_id' => 'DANA-ORDER-UAT-LOCK-HELD',
+            'amount_minor' => 30_000,
+            'status' => 'pending',
+            'metadata' => ['udev_sandbox_tester' => true],
+        ]);
+        $payload = $this->finishNotifyPayload($payment, '00');
+        $cacheKey = "dana:uat:simulate_notify_500:merchant:{$merchant->id}:payment:{$payment->id}";
+        $lockKey = "dana:uat:simulate_notify_500:lock:{$merchant->id}:{$payment->id}";
+
+        Cache::put($cacheKey, [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'payment_public_id' => $payment->public_id,
+            'armed_at' => now()->toIso8601String(),
+        ], now()->addMinutes(10));
+
+        // Request 1 memicu simulasi 500 dan mengonsumsi lock & flag
+        $response1 = $this->postWebhook($payload);
+        $response1->assertStatus(500)->assertJsonPath('responseCode', '5005601');
+
+        // Request 2 yang datang paralel / setelahnya diproses normal ke paid
+        $response2 = $this->postWebhook($payload);
+        $response2->assertOk()->assertJsonPath('responseCode', '2005600');
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'paid']);
+    }
+
+    public function test_sandbox_webhook_simulated_500_works_when_app_env_is_production_for_sandbox_payments(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'provider_order_id' => 'DANA-ORDER-UAT-ENV-PROD',
+            'status' => 'pending',
+            'environment' => 'sandbox',
+            'metadata' => ['udev_sandbox_tester' => true],
+        ]);
+        $payload = $this->finishNotifyPayload($payment, '00');
+        $cacheKey = "dana:uat:simulate_notify_500:merchant:{$merchant->id}:payment:{$payment->id}";
+        Cache::put($cacheKey, [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'payment_public_id' => $payment->public_id,
+        ], now()->addMinutes(10));
+
+        // Simulasikan server yang berjalan dengan APP_ENV=production
+        config(['app.env' => 'production']);
+
+        $this->postWebhook($payload)
+            ->assertStatus(500)
+            ->assertJsonPath('responseCode', '5005601')
+            ->assertJsonPath('responseMessage', 'Internal Server Error');
+
+        $this->assertDatabaseHas('payments', ['id' => $payment->id, 'status' => 'pending']);
+    }
+
+    public function test_sandbox_webhook_simulated_500_requires_valid_signature_and_never_triggers_in_production(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create([
+            'provider_order_id' => 'DANA-ORDER-UAT-500-SIG',
+            'status' => 'pending',
+            'metadata' => ['udev_sandbox_tester' => true],
+        ]);
+        $payload = $this->finishNotifyPayload($payment, '00');
+        $cacheKey = "dana:uat:simulate_notify_500:merchant:{$merchant->id}:payment:{$payment->id}";
+        Cache::put($cacheKey, [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'payment_public_id' => $payment->public_id,
+        ], now()->addMinutes(10));
+
+        // Signature tidak valid tetap harus ditolak dengan 400, bukan 500
+        $this->postWebhook($payload, signature: 'invalid-signature')->assertStatus(400);
+
+        // Simulasi tidak pernah terpicu untuk transaksi non-sandbox tester
+        MerchantPaymentConfig::factory()->for($merchant)->create([
+            'partner_id' => 'partner-dana-001',
+            'callback_url' => 'https://merchant.example/payment-return',
+            'enabled' => true,
+            'environment' => 'production',
+            'encrypted_credentials' => [
+                'merchant_id' => 'merchant-dana-001',
+                'private_key' => 'test-private-key',
+                'dana_webhook_public_key' => 'verified-dana-public-key',
+                'origin' => 'merchant.example',
+                'channel_id' => '95221',
+                'notification_url' => 'https://merchant.example/api/v1/webhooks/dana',
+                'mcc' => '5814',
+            ],
+        ]);
+        $prodPayment = Payment::factory()->for($merchant)->create([
+            'provider_order_id' => 'DANA-ORDER-PROD',
+            'status' => 'pending',
+            'environment' => 'production',
+            'metadata' => null,
+        ]);
+        $prodCacheKey = "dana:uat:simulate_notify_500:merchant:{$merchant->id}:payment:{$prodPayment->id}";
+        Cache::put($prodCacheKey, [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $prodPayment->id,
+            'payment_public_id' => $prodPayment->public_id,
+        ], now()->addMinutes(10));
+
+        $prodPayload = $this->finishNotifyPayload($prodPayment, '00');
+        $this->postWebhook($prodPayload)->assertOk()->assertJsonPath('responseCode', '2005600');
+        $this->assertDatabaseHas('payments', ['id' => $prodPayment->id, 'status' => 'paid']);
     }
 
     public function test_finish_notify_without_original_partner_reference_is_rejected_without_changing_payment_status(): void

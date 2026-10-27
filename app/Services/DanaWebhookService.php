@@ -2,11 +2,15 @@
 
 namespace App\Services;
 
+use App\Exceptions\DanaWebhookSimulatedServerException;
 use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
 use App\Models\PaymentEvent;
 use App\Models\PaymentWebhook;
 use DateTimeImmutable;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -116,6 +120,10 @@ class DanaWebhookService
         }
 
         $this->validatePaymentPayload($payment, $payload, $rawBody);
+
+        if ($this->consumeSimulatedServerError($payment, $rawBody)) {
+            throw new DanaWebhookSimulatedServerException('UAT DANA Sandbox Finish Notify 5005601 simulasi aktif.');
+        }
 
         if (! $this->applyPaymentStatus($payment, $payload, $rawBody)) {
             throw new RuntimeException('Webhook DANA tidak valid.');
@@ -232,6 +240,95 @@ class DanaWebhookService
         ]);
 
         Log::warning('Webhook DANA ditolak.', ['payment_id' => $payment?->getKey(), 'error_code' => $errorCode]);
+    }
+
+    private function consumeSimulatedServerError(Payment $payment, string $rawBody): bool
+    {
+        if ($payment->environment !== 'sandbox') {
+            return false;
+        }
+
+        $metadata = $payment->metadata;
+        if (! is_array($metadata) || empty($metadata['udev_sandbox_tester'])) {
+            return false;
+        }
+
+        $cacheKey = DanaSandboxTesterService::simulateWebhook500CacheKey($payment->merchant_id, $payment->getKey());
+        $lockKey = "dana:uat:simulate_notify_500:lock:{$payment->merchant_id}:{$payment->getKey()}";
+
+        $evaluator = function () use ($payment, $rawBody, $cacheKey): bool {
+            $flag = Cache::get($cacheKey);
+            if ($flag === null) {
+                return false;
+            }
+
+            if (is_array($flag)) {
+                if (($flag['merchant_id'] ?? null) !== $payment->merchant_id || ($flag['payment_id'] ?? null) !== $payment->getKey()) {
+                    Cache::forget($cacheKey);
+
+                    return false;
+                }
+
+                $armedAt = isset($flag['armed_at']) ? Carbon::parse($flag['armed_at']) : null;
+                if ($armedAt !== null) {
+                    $alreadySimulated = PaymentWebhook::query()
+                        ->where('payment_id', $payment->getKey())
+                        ->where('error_code', 'uat_simulated_500')
+                        ->where('created_at', '>=', $armedAt->subSeconds(2))
+                        ->exists();
+
+                    if ($alreadySimulated) {
+                        Cache::forget($cacheKey);
+
+                        return false;
+                    }
+                }
+            }
+
+            // Hapus flag cache terlebih dahulu di dalam lock
+            Cache::forget($cacheKey);
+
+            // Rekam webhook rejected UAT 500 di dalam lock sebelum melepaskan lock
+            $this->recordSimulatedServerError($payment, $rawBody);
+
+            return true;
+        };
+
+        try {
+            $lock = Cache::lock($lockKey, 10);
+
+            return (bool) $lock->block(5, $evaluator);
+        } catch (\BadMethodCallException) {
+            return (bool) DB::transaction(function () use ($payment, $evaluator): bool {
+                Payment::query()->lockForUpdate()->findOrFail($payment->getKey());
+
+                return $evaluator();
+            });
+        } catch (LockTimeoutException) {
+            return false;
+        }
+    }
+
+    private function recordSimulatedServerError(Payment $payment, string $rawBody): void
+    {
+        PaymentWebhook::query()->create([
+            'merchant_id' => $payment->merchant_id,
+            'payment_id' => $payment->getKey(),
+            'provider' => 'dana',
+            'environment' => 'sandbox',
+            'payload_sha256' => hash('sha256', $rawBody),
+            'provider_event_id' => null,
+            'signature_valid' => true,
+            'processing_status' => 'rejected',
+            'attempts' => 1,
+            'processed_at' => now(),
+            'error_code' => 'uat_simulated_500',
+        ]);
+
+        Log::info('UAT DANA Sandbox Finish Notify HTTP 500 (5005601) simulasi berhasil terpicu.', [
+            'payment_id' => $payment->getKey(),
+            'merchant_id' => $payment->merchant_id,
+        ]);
     }
 
     /** @param array{signature_valid: bool, signature_base64_valid: bool, signature_decoded_bytes: int|null, public_key_valid: bool, public_key_bits: int|null, public_key_sha256: string|null, public_key_is_rsa: bool, string_to_sign_sha256: string|null, openssl_verify_result: int|null, openssl_verification_completed: bool} $signatureDiagnostics */

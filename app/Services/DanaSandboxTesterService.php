@@ -9,6 +9,7 @@ use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
@@ -97,6 +98,66 @@ class DanaSandboxTesterService
             'merchant_code' => $merchant->code,
             'environment' => 'sandbox',
             'uat' => $this->createOrderUatService->inconsistentRequest($config),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function armWebhookSimulated500(Merchant $merchant, ?string $paymentPublicId, string $serviceId): array
+    {
+        $this->assertTesterCanAccessMerchant($merchant, $serviceId);
+
+        $query = Payment::query()
+            ->forMerchant($merchant)
+            ->where('environment', 'sandbox')
+            ->where('status', 'pending')
+            ->whereJsonContains('metadata->udev_sandbox_tester', true);
+
+        if (is_string($paymentPublicId) && $paymentPublicId !== '') {
+            $payment = $query->where('public_id', $paymentPublicId)->first();
+        } else {
+            $payment = $query->latest('id')->first();
+        }
+
+        if ($payment === null) {
+            throw new UnprocessableEntityHttpException('Tidak ditemukan transaksi Sandbox berstatus pending untuk simulasi Webhook 500. Silakan buat transaksi Sandbox terlebih dahulu.');
+        }
+
+        $ttlMinutes = 10;
+        $cacheKey = $this->simulateWebhook500CacheKey($merchant->getKey(), $payment->getKey());
+        Cache::put($cacheKey, [
+            'merchant_id' => $merchant->getKey(),
+            'payment_id' => $payment->getKey(),
+            'payment_public_id' => $payment->public_id,
+            'environment' => 'sandbox',
+            'armed_at' => now()->toIso8601String(),
+        ], now()->addMinutes($ttlMinutes));
+
+        $this->recordRun(
+            $merchant,
+            'uat_webhook_500_armed',
+            'succeeded',
+            'Simulasi Finish Notify HTTP 500 (5005601) berhasil diaktifkan selama 10 menit untuk satu kali penggunaan.',
+            ['payment_public_id' => $payment->public_id, 'expires_at' => now()->addMinutes($ttlMinutes)->toISOString()],
+            $payment,
+        );
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'uat' => [
+                'scenario' => 'finish_notify_simulated_500',
+                'armed' => true,
+                'payment_id' => $payment->public_id,
+                'partner_reference_no' => $payment->partner_reference_no ?? $payment->public_id,
+                'expected' => [
+                    'http_status' => 500,
+                    'response_code' => '5005601',
+                    'response_message' => 'Internal Server Error',
+                ],
+                'single_use' => true,
+                'expires_in_minutes' => $ttlMinutes,
+                'expires_at' => now('Asia/Jakarta')->addMinutes($ttlMinutes)->format('Y-m-d\\TH:i:sP'),
+            ],
         ];
     }
 
@@ -473,6 +534,11 @@ class DanaSandboxTesterService
             'message' => $message,
             'safe_details' => $safeDetails,
         ]);
+    }
+
+    public static function simulateWebhook500CacheKey(int|string $merchantId, int|string $paymentId): string
+    {
+        return "dana:uat:simulate_notify_500:merchant:{$merchantId}:payment:{$paymentId}";
     }
 
     private function merchantNotFound(Merchant $merchant): never

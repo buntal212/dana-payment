@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Exceptions\DanaWebhookSimulatedServerException;
 use App\Http\Controllers\Controller;
 use App\Services\DanaWebhookService;
 use Illuminate\Http\JsonResponse;
@@ -22,6 +23,11 @@ class DanaWebhookController extends Controller
                 // forwarding yang dapat dikirim oleh pemanggil webhook.
                 'request-path' => $request->getPathInfo(),
             ]);
+        } catch (DanaWebhookSimulatedServerException) {
+            return response()->json([
+                'responseCode' => '5005601',
+                'responseMessage' => 'Internal Server Error',
+            ], 500)->header('X-TIMESTAMP', now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP'));
         } catch (RuntimeException) {
             return response()->json(['message' => 'Webhook tidak valid.'], 400);
         }

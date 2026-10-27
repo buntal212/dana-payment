@@ -9,6 +9,7 @@ use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\Fixtures\DanaSandboxKeyMaterialFixture;
 use Tests\TestCase;
@@ -237,6 +238,34 @@ class DanaSandboxTesterApiTest extends TestCase
 
         $this->assertDatabaseCount('payments', 0);
         $this->assertDatabaseCount('dana_sandbox_test_runs', 0);
+    }
+
+    public function test_arm_sandbox_webhook_simulated_500_arms_pending_transaction_and_stores_cache_key(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        $payment = Payment::factory()->for($merchant)->create([
+            'environment' => 'sandbox',
+            'status' => 'pending',
+            'metadata' => ['udev_sandbox_tester' => true],
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->armWebhook500UatUrl($merchant), ['payment_id' => $payment->public_id])
+            ->assertOk()
+            ->assertJsonPath('data.uat.scenario', 'finish_notify_simulated_500')
+            ->assertJsonPath('data.uat.armed', true)
+            ->assertJsonPath('data.uat.payment_id', $payment->public_id)
+            ->assertJsonPath('data.uat.expected.http_status', 500)
+            ->assertJsonPath('data.uat.expected.response_code', '5005601')
+            ->assertDontSee(DanaSandboxKeyMaterialFixture::PrivateKey);
+
+        $cacheKey = "dana:uat:simulate_notify_500:merchant:{$merchant->id}:payment:{$payment->id}";
+        $this->assertTrue(Cache::has($cacheKey));
+        $cachedData = Cache::get($cacheKey);
+        $this->assertSame($merchant->id, $cachedData['merchant_id']);
+        $this->assertSame($payment->id, $cachedData['payment_id']);
+        $this->assertSame($payment->public_id, $cachedData['payment_public_id']);
     }
 
     public function test_creates_sandbox_checkout_through_existing_gateway_and_never_marks_it_paid(): void
@@ -552,6 +581,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function inconsistentRequestUatUrl(Merchant $merchant): string
     {
         return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/create-order-inconsistent-request";
+    }
+
+    private function armWebhook500UatUrl(Merchant $merchant): string
+    {
+        return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/arm-webhook-500";
     }
 
     private function transactionStatusUrl(Merchant $merchant, Payment $payment): string

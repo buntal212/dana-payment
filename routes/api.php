@@ -41,6 +41,8 @@ Route::prefix('v1/internal')->group(function (): void {
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::post('merchants/{merchant}/sandbox-tester/uat/create-order-inconsistent-request', [MerchantManagementController::class, 'testCreateOrderInconsistentRequest'])
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
+    Route::post('merchants/{merchant}/sandbox-tester/uat/arm-webhook-500', [MerchantManagementController::class, 'armDanaSandboxWebhookSimulated500'])
+        ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::get('merchants/{merchant}/sandbox-tester/transactions', [MerchantManagementController::class, 'danaSandboxTestHistory'])
         ->middleware(['throttle:internal-service', 'internal:merchants:credentials:read', 'internal-https']);
     Route::post('merchants/{merchant}/sandbox-tester/transactions', [MerchantManagementController::class, 'createDanaSandboxTestTransaction'])

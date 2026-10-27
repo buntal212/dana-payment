@@ -66,6 +66,14 @@ class MerchantManagementController extends Controller
             ->header('Cache-Control', 'no-store');
     }
 
+    public function armDanaSandboxWebhookSimulated500(Merchant $merchant, Request $request, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        $paymentId = $request->input('payment_id');
+
+        return response()->json(['data' => $testerService->armWebhookSimulated500($merchant, is_string($paymentId) ? $paymentId : null, $this->serviceId())])
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function createDanaSandboxTestTransaction(Merchant $merchant, StoreDanaSandboxTestTransactionRequest $request, DanaSandboxTesterService $testerService): JsonResponse
     {
         return response()->json(['data' => $testerService->createTransaction($merchant, $request->transactionAttributes(), $this->serviceId())], 201)
