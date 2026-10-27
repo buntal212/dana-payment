@@ -166,4 +166,148 @@ final class DanaSandboxCreateOrderUatService
             'request' => ['amount_format_valid' => false],
         ];
     }
+
+    /**
+     * Sends two consecutive Sandbox Create Order requests with identical
+     * partnerReferenceNo but different amounts (Rp100.000 then Rp200.000).
+     * Request 1 expects 2005400 (success), and Request 2 expects 4045418 (Inconsistent Request).
+     *
+     * @return array{scenario: string, passed: bool, expected: array{response_code: string, response_message: string}, first_request: array<string, mixed>, second_request: array<string, mixed>, received: array<string, mixed>}
+     */
+    public function inconsistentRequest(MerchantPaymentConfig $config): array
+    {
+        $credentials = $this->credentialResolver->resolve($config);
+        $reference = 'UAT-INC-'.Str::upper(Str::random(18));
+        $expiresAt = now('Asia/Jakarta')->addMinutes(5);
+
+        // --- Request 1: Nominal Rp100.000 (sukses) ---
+        $timestamp1 = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
+        $externalId1 = (string) Str::ulid();
+        $payload1 = [
+            'partnerReferenceNo' => $reference,
+            'merchantId' => $credentials->merchantId,
+            'amount' => ['value' => $this->amountFormatter->formatIdr(100000), 'currency' => 'IDR'],
+            'validUpTo' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+            'urlParams' => [
+                ['url' => $credentials->returnUrl, 'type' => 'PAY_RETURN', 'isDeeplink' => 'N'],
+                ['url' => $credentials->notificationUrl, 'type' => 'NOTIFICATION', 'isDeeplink' => 'N'],
+            ],
+            'additionalInfo' => [
+                'order' => ['orderTitle' => 'UAT inconsistent request (first)', 'scenario' => 'API'],
+                'mcc' => $credentials->mcc,
+                'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
+            ],
+        ];
+        $body1 = json_encode($payload1, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        $signature1 = $this->signatureService->signTransactional('POST', self::CreateOrderPath, $body1, $timestamp1, $credentials->privateKey);
+
+        try {
+            $response1 = Http::acceptJson()
+                ->timeout((int) config('services.dana.timeout', 8))
+                ->connectTimeout((int) config('services.dana.connect_timeout', 3))
+                ->withHeaders([
+                    'X-TIMESTAMP' => $timestamp1,
+                    'X-SIGNATURE' => $signature1,
+                    'ORIGIN' => $credentials->origin,
+                    'X-PARTNER-ID' => $credentials->partnerId,
+                    'X-EXTERNAL-ID' => $externalId1,
+                    'CHANNEL-ID' => $credentials->channelId,
+                ])
+                ->withBody($body1, 'application/json')
+                ->post(rtrim((string) config('services.dana.base_url'), '/').self::CreateOrderPath);
+        } catch (ConnectionException $exception) {
+            throw new RuntimeException('UAT Create Order DANA Sandbox request 1 tidak dapat dihubungi.', previous: $exception);
+        }
+
+        $data1 = $response1->json();
+        $firstResponseCode = is_array($data1) && is_string($data1['responseCode'] ?? null) && preg_match('/\\A\\d{7}\\z/', $data1['responseCode']) === 1
+            ? $data1['responseCode']
+            : null;
+        $firstActualMessage = is_array($data1) && is_string($data1['responseMessage'] ?? null)
+            ? $data1['responseMessage']
+            : null;
+        $firstPassed = $firstResponseCode === '2005400';
+        $requestId1 = $response1->header('X-Request-ID') ?? $response1->header('Request-Id');
+
+        // --- Request 2: PartnerReferenceNo IDENTIK, nominal Rp200.000 (Inconsistent Request 4045418) ---
+        $timestamp2 = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
+        $externalId2 = (string) Str::ulid();
+        $payload2 = [
+            'partnerReferenceNo' => $reference,
+            'merchantId' => $credentials->merchantId,
+            'amount' => ['value' => $this->amountFormatter->formatIdr(200000), 'currency' => 'IDR'],
+            'validUpTo' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+            'urlParams' => [
+                ['url' => $credentials->returnUrl, 'type' => 'PAY_RETURN', 'isDeeplink' => 'N'],
+                ['url' => $credentials->notificationUrl, 'type' => 'NOTIFICATION', 'isDeeplink' => 'N'],
+            ],
+            'additionalInfo' => [
+                'order' => ['orderTitle' => 'UAT inconsistent request (second)', 'scenario' => 'API'],
+                'mcc' => $credentials->mcc,
+                'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
+            ],
+        ];
+        $body2 = json_encode($payload2, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        $signature2 = $this->signatureService->signTransactional('POST', self::CreateOrderPath, $body2, $timestamp2, $credentials->privateKey);
+
+        try {
+            $response2 = Http::acceptJson()
+                ->timeout((int) config('services.dana.timeout', 8))
+                ->connectTimeout((int) config('services.dana.connect_timeout', 3))
+                ->withHeaders([
+                    'X-TIMESTAMP' => $timestamp2,
+                    'X-SIGNATURE' => $signature2,
+                    'ORIGIN' => $credentials->origin,
+                    'X-PARTNER-ID' => $credentials->partnerId,
+                    'X-EXTERNAL-ID' => $externalId2,
+                    'CHANNEL-ID' => $credentials->channelId,
+                ])
+                ->withBody($body2, 'application/json')
+                ->post(rtrim((string) config('services.dana.base_url'), '/').self::CreateOrderPath);
+        } catch (ConnectionException $exception) {
+            throw new RuntimeException('UAT Create Order DANA Sandbox request 2 tidak dapat dihubungi.', previous: $exception);
+        }
+
+        $data2 = $response2->json();
+        $secondResponseCode = is_array($data2) && is_string($data2['responseCode'] ?? null) && preg_match('/\\A\\d{7}\\z/', $data2['responseCode']) === 1
+            ? $data2['responseCode']
+            : null;
+        $expectedMessage = 'Inconsistent Request';
+        $secondActualMessage = is_array($data2) && is_string($data2['responseMessage'] ?? null)
+            ? $data2['responseMessage']
+            : null;
+        $secondPassed = $secondResponseCode === '4045418' && $secondActualMessage === $expectedMessage;
+        $passed = $firstPassed && $secondPassed;
+        $requestId2 = $response2->header('X-Request-ID') ?? $response2->header('Request-Id');
+
+        $firstRequestInfo = [
+            'amount' => '100000.00',
+            'http_status' => $response1->status(),
+            'response_code' => $firstResponseCode,
+            'response_message' => $firstPassed ? 'Successful' : ($firstActualMessage ?? 'Gagal membuat order pertama.'),
+            'request_id' => is_string($requestId1) && preg_match('/\\A[A-Za-z0-9._-]{1,128}\\z/', $requestId1) === 1 ? $requestId1 : null,
+        ];
+
+        $secondRequestInfo = [
+            'amount' => '200000.00',
+            'http_status' => $response2->status(),
+            'response_code' => $secondResponseCode,
+            'response_message' => $secondPassed ? $expectedMessage : ($secondActualMessage ?? 'Respons DANA tidak sesuai ekspektasi UAT.'),
+            'request_id' => is_string($requestId2) && preg_match('/\\A[A-Za-z0-9._-]{1,128}\\z/', $requestId2) === 1 ? $requestId2 : null,
+        ];
+
+        return [
+            'scenario' => 'create_order_inconsistent_request',
+            'passed' => $passed,
+            'expected' => ['response_code' => '4045418', 'response_message' => $expectedMessage],
+            'first_request' => $firstRequestInfo,
+            'second_request' => $secondRequestInfo,
+            'received' => $secondRequestInfo,
+            'request' => [
+                'partner_reference_no' => $reference,
+                'first_amount' => '100000.00',
+                'second_amount' => '200000.00',
+            ],
+        ];
+    }
 }

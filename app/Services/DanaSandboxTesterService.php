@@ -84,6 +84,22 @@ class DanaSandboxTesterService
         ];
     }
 
+    /** @return array<string, mixed> */
+    public function testCreateOrderInconsistentRequest(Merchant $merchant, string $serviceId): array
+    {
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        $validation = $this->configurationValidation($config);
+        if ($validation['format_valid'] !== true || $config === null) {
+            throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT Create Order.');
+        }
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'uat' => $this->createOrderUatService->inconsistentRequest($config),
+        ];
+    }
+
     /**
      * @param  array{amount_minor: int, payment_method: string, idempotency_key: string, return_context: ?string}  $attributes
      * @return array<string, mixed>

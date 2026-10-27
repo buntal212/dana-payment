@@ -162,6 +162,49 @@ class DanaSandboxTesterApiTest extends TestCase
             && json_decode($request->body(), true)['amount']['value'] === 'INVALID');
     }
 
+    public function test_inconsistent_request_uat_sends_two_orders_and_expects_4045418(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+
+        $callCount = 0;
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/payment-host-to-host.htm' => function (Request $request) use (&$callCount) {
+                $callCount++;
+                if ($callCount === 1) {
+                    return Http::response([
+                        'responseCode' => '2005400',
+                        'responseMessage' => 'Successful',
+                        'referenceNo' => 'DANA-ORDER-INC-001',
+                    ], 200, ['X-Request-ID' => 'uat-inc-req-001']);
+                }
+
+                return Http::response([
+                    'responseCode' => '4045418',
+                    'responseMessage' => 'Inconsistent Request',
+                ], 404, ['X-Request-ID' => 'uat-inc-req-002']);
+            },
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->inconsistentRequestUatUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.uat.scenario', 'create_order_inconsistent_request')
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.first_request.response_code', '2005400')
+            ->assertJsonPath('data.uat.first_request.amount', '100000.00')
+            ->assertJsonPath('data.uat.second_request.response_code', '4045418')
+            ->assertJsonPath('data.uat.second_request.response_message', 'Inconsistent Request')
+            ->assertJsonPath('data.uat.second_request.amount', '200000.00')
+            ->assertDontSee(DanaSandboxKeyMaterialFixture::PrivateKey);
+
+        $this->assertSame(2, $callCount);
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseCount('dana_sandbox_test_runs', 0);
+    }
+
     public function test_creates_sandbox_checkout_through_existing_gateway_and_never_marks_it_paid(): void
     {
         $merchant = $this->managedMerchant();
@@ -470,6 +513,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function invalidAmountFormatUatUrl(Merchant $merchant): string
     {
         return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/create-order-invalid-amount-format";
+    }
+
+    private function inconsistentRequestUatUrl(Merchant $merchant): string
+    {
+        return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/create-order-inconsistent-request";
     }
 
     private function transactionStatusUrl(Merchant $merchant, Payment $payment): string
