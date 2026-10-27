@@ -84,6 +84,59 @@ class DanaSandboxQueryPaymentService
         ];
     }
 
+    /** @return array{http_status: int, response_code: string|null, response_message: string|null, request_id: string|null, checked_at: string} */
+    public function queryFictitiousReference(string $referenceNo, MerchantPaymentConfig $config): array
+    {
+        if ($config->environment !== 'sandbox' || $config->provider !== 'dana') {
+            throw new \LogicException('Query Payment hanya tersedia untuk konfigurasi DANA Sandbox.');
+        }
+
+        $credentials = $this->credentialResolver->resolve($config);
+        $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
+        $payload = [
+            'originalPartnerReferenceNo' => $referenceNo,
+            'serviceCode' => '54',
+            'merchantId' => $credentials->merchantId,
+        ];
+        if ($credentials->subMerchantId !== null) {
+            $payload['subMerchantId'] = $credentials->subMerchantId;
+        }
+
+        $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        $signature = $this->signatureService->signTransactional('POST', self::QUERY_PAYMENT_PATH, $body, $timestamp, $credentials->privateKey);
+
+        try {
+            $response = Http::acceptJson()
+                ->timeout((int) config('services.dana.timeout', 8))
+                ->connectTimeout((int) config('services.dana.connect_timeout', 3))
+                ->withHeaders([
+                    'X-TIMESTAMP' => $timestamp,
+                    'X-SIGNATURE' => $signature,
+                    'ORIGIN' => $credentials->origin,
+                    'X-PARTNER-ID' => $credentials->partnerId,
+                    'X-EXTERNAL-ID' => 'status-uat-'.Str::ulid(),
+                    'CHANNEL-ID' => $credentials->channelId,
+                ])
+                ->withBody($body, 'application/json')
+                ->post(rtrim((string) config('services.dana.base_url'), '/').self::QUERY_PAYMENT_PATH);
+        } catch (ConnectionException $exception) {
+            throw new RuntimeException('Query Payment DANA Sandbox sementara tidak tersedia.', previous: $exception);
+        }
+
+        $responseBody = $response->json();
+        $bodyData = is_array($responseBody) ? $responseBody : [];
+
+        return [
+            'http_status' => $response->status(),
+            'response_code' => $this->stringOrNull($bodyData['responseCode'] ?? null),
+            'response_message' => $this->stringOrNull($bodyData['responseMessage'] ?? null),
+            'request_id' => $this->stringOrNull($bodyData['requestID'] ?? null)
+                ?? $this->stringOrNull($response->header('X-Request-ID'))
+                ?? $this->stringOrNull($response->header('Request-Id')),
+            'checked_at' => now('Asia/Jakarta')->toIso8601String(),
+        ];
+    }
+
     private function stringOrNull(mixed $value): ?string
     {
         return is_string($value) && $value !== '' ? mb_substr($value, 0, 150) : null;
