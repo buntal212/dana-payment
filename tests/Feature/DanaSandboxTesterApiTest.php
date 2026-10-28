@@ -770,6 +770,117 @@ class DanaSandboxTesterApiTest extends TestCase
         ]);
     }
 
+    public function test_ipg_invalid_signature_uat_sends_snap_rsa_signature_with_transient_key_and_expects_4015400(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+
+        Http::fake([
+            'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host' => Http::response([
+                'responseCode' => '4015400',
+                'responseMessage' => 'Unauthorized. [Signature check failed]',
+            ], 401, ['X-Request-ID' => 'uat-ipg-invalid-sig-001']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgInvalidSignatureUatUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.uat.scenario', 'ipg_create_order_invalid_signature')
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.expected.response_code', '4015400')
+            ->assertJsonPath('data.uat.expected.response_message', 'Unauthorized')
+            ->assertJsonPath('data.uat.received.http_status', 401)
+            ->assertJsonPath('data.uat.received.response_code', '4015400')
+            ->assertJsonPath('data.uat.received.response_message', 'Unauthorized. [Signature check failed]')
+            ->assertJsonPath('data.uat.received.request_id', 'uat-ipg-invalid-sig-001')
+            ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
+            ->assertJsonPath('data.uat.request.amount_value', '10000.00')
+            ->assertJsonPath('data.uat.request.product_code', '51051000100000000001')
+            ->assertJsonPath('data.uat.request.support_deep_link_checkout_url', 'true')
+            ->assertJsonPath('data.uat.request.signature_strategy', 'transient_rsa_private_key')
+            ->assertDontSee(DanaSandboxKeyMaterialFixture::PrivateKey);
+
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseCount('dana_sandbox_test_runs', 1);
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->getKey(),
+            'operation' => 'ipg_create_order_invalid_signature_tested',
+            'status' => 'failed',
+        ]);
+
+        Http::assertSent(function (Request $request): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+            $validUpTo = Carbon::parse($payload['validUpTo']);
+            $diffMinutes = (int) round(now('Asia/Jakarta')->diffInSeconds($validUpTo) / 60);
+
+            $signatureService = app(DanaSnapSignatureService::class);
+            $sigValidMerchantKey = $signatureService->verifyTransactional(
+                'POST',
+                '/rest/redirection/v1.0/debit/payment-host-to-host',
+                $request->body(),
+                $request->header('X-TIMESTAMP')[0] ?? '',
+                $request->header('X-SIGNATURE')[0] ?? '',
+                DanaSandboxKeyMaterialFixture::PublicKey,
+            );
+
+            $transientPrivRes = openssl_pkey_get_private(\App\Services\DanaSandboxIpgCashierUatService::TransientInvalidPrivateKey);
+            $transientPubKey = openssl_pkey_get_details($transientPrivRes)['key'];
+            $sigValidTransientKey = $signatureService->verifyTransactional(
+                'POST',
+                '/rest/redirection/v1.0/debit/payment-host-to-host',
+                $request->body(),
+                $request->header('X-TIMESTAMP')[0] ?? '',
+                $request->header('X-SIGNATURE')[0] ?? '',
+                $transientPubKey,
+            );
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host'
+                && $request->hasHeader('X-TIMESTAMP')
+                && $request->hasHeader('X-SIGNATURE')
+                && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
+                && ($payload['amount']['value'] ?? null) === '10000.00'
+                && ($payload['additionalInfo']['supportDeepLinkCheckoutUrl'] ?? null) === 'true'
+                && ($payload['additionalInfo']['productCode'] ?? null) === '51051000100000000001'
+                && ($payload['additionalInfo']['envInfo']['sourcePlatform'] ?? null) === 'IPG'
+                && $diffMinutes >= 14 && $diffMinutes <= 16
+                && $sigValidMerchantKey === false
+                && $sigValidTransientKey === true;
+        });
+    }
+
+    public function test_ipg_invalid_signature_records_safe_failure_when_dana_does_not_return_4015400(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+
+        Http::fake([
+            'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host' => Http::response([
+                'responseCode' => '2005400',
+                'responseMessage' => 'Successful',
+            ], 200, ['X-Request-ID' => 'uat-ipg-success-unexpected']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgInvalidSignatureUatUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.uat.scenario', 'ipg_create_order_invalid_signature')
+            ->assertJsonPath('data.uat.passed', false)
+            ->assertJsonPath('data.uat.received.response_code', '2005400')
+            ->assertJsonPath('data.uat.received.response_message', 'Successful');
+
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseCount('dana_sandbox_test_runs', 1);
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->getKey(),
+            'operation' => 'ipg_create_order_invalid_signature_tested',
+            'status' => 'failed',
+        ]);
+    }
+
     public function test_debit_status_transaction_not_found_uat_sends_signed_request_with_fictitious_reference_and_expects_4045501(): void
     {
         $merchant = $this->managedMerchant();
@@ -1459,6 +1570,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function ipgInconsistentRequestUatUrl(Merchant $merchant): string
     {
         return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/ipg-create-order-inconsistent-request";
+    }
+
+    private function ipgInvalidSignatureUatUrl(Merchant $merchant): string
+    {
+        return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/ipg-create-order-invalid-signature";
     }
 
     private function debitStatusNotFoundUatUrl(Merchant $merchant): string
