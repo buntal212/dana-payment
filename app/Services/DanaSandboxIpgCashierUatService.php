@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\MerchantPaymentConfig;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -23,7 +24,7 @@ final class DanaSandboxIpgCashierUatService
      * to /rest/redirection/v1.0/debit/payment-host-to-host. It never creates a local
      * Payment or Invoice record.
      *
-     * @return array{scenario: string, passed: bool, expected: array{response_code: string, response_message: string}, received: array{http_status: int, response_code: string|null, response_message: string, reference_no: string|null, web_redirect_url: string|null, request_id: string|null}, request: array{endpoint: string, x_timestamp_sent: bool}}
+     * @return array{scenario: string, passed: bool, expected: array{response_code: string, response_message: string}, received: array{http_status: int, response_code: string|null, response_message: string, reference_no: string|null, web_redirect_url: string|null, request_id: string|null}, request: array<string, mixed>}
      */
     public function createOrderSuccess(MerchantPaymentConfig $config): array
     {
@@ -33,7 +34,7 @@ final class DanaSandboxIpgCashierUatService
 
         $credentials = $this->credentialResolver->resolve($config);
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
-        $expiresAt = now('Asia/Jakarta')->addMinutes(30);
+        $expiresAt = now('Asia/Jakarta')->addMinutes(15);
         $reference = (string) Str::ulid();
         $externalId = (string) Str::ulid();
         $payload = [
@@ -49,6 +50,7 @@ final class DanaSandboxIpgCashierUatService
                 'order' => ['orderTitle' => 'UAT IPG Cashier Success', 'scenario' => 'REDIRECT'],
                 'mcc' => $credentials->mcc,
                 'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
+                'supportDeepLinkCheckoutUrl' => 'true',
             ],
         ];
         if ($credentials->subMerchantId !== null) {
@@ -57,6 +59,13 @@ final class DanaSandboxIpgCashierUatService
 
         $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $signature = $this->signatureService->signTransactional('POST', self::IpgCreateOrderPath, $body, $timestamp, $credentials->privateKey);
+
+        Log::debug('UAT DANA Cashier Pay Create Order Request.', [
+            'endpoint' => self::IpgCreateOrderPath,
+            'partner_reference_no' => $reference,
+            'valid_up_to' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+            'support_deep_link' => 'true',
+        ]);
 
         try {
             $response = Http::acceptJson()
@@ -91,6 +100,13 @@ final class DanaSandboxIpgCashierUatService
         $referenceNo = is_string($data['referenceNo'] ?? null) ? $data['referenceNo'] : null;
         $webRedirectUrl = is_string($data['webRedirectUrl'] ?? null) ? $data['webRedirectUrl'] : null;
 
+        Log::debug('UAT DANA Cashier Pay Create Order Response.', [
+            'http_status' => $response->status(),
+            'response_code' => $responseCode,
+            'passed' => $passed,
+            'request_id' => $requestId,
+        ]);
+
         return [
             'scenario' => 'ipg_create_order_success',
             'passed' => $passed,
@@ -110,6 +126,8 @@ final class DanaSandboxIpgCashierUatService
                 'partner_reference_no' => $reference,
                 'amount_value' => $this->amountFormatter->formatIdr(10000),
                 'currency' => 'IDR',
+                'valid_up_to' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+                'support_deep_link_checkout_url' => 'true',
                 'order_title' => 'UAT IPG Cashier Success',
                 'scenario' => 'REDIRECT',
                 'partner_id' => $credentials->partnerId,
@@ -123,7 +141,7 @@ final class DanaSandboxIpgCashierUatService
      * Executes an official, transient Sandbox IPG Cashier Pay request deliberately
      * omitting the X-TIMESTAMP header. Expects HTTP 400 and responseCode 4005402.
      *
-     * @return array{scenario: string, passed: bool, expected: array{response_code: string, response_message: string}, received: array{http_status: int, response_code: string|null, response_message: string, request_id: string|null}, request: array{endpoint: string, x_timestamp_sent: bool}}
+     * @return array{scenario: string, passed: bool, expected: array{response_code: string, response_message: string}, received: array{http_status: int, response_code: string|null, response_message: string, request_id: string|null}, request: array<string, mixed>}
      */
     public function missingTimestamp(MerchantPaymentConfig $config): array
     {
@@ -133,7 +151,7 @@ final class DanaSandboxIpgCashierUatService
 
         $credentials = $this->credentialResolver->resolve($config);
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
-        $expiresAt = now('Asia/Jakarta')->addMinutes(30);
+        $expiresAt = now('Asia/Jakarta')->addMinutes(15);
         $reference = (string) Str::ulid();
         $externalId = (string) Str::ulid();
         $payload = [
@@ -149,6 +167,7 @@ final class DanaSandboxIpgCashierUatService
                 'order' => ['orderTitle' => 'UAT IPG Missing Timestamp', 'scenario' => 'REDIRECT'],
                 'mcc' => $credentials->mcc,
                 'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
+                'supportDeepLinkCheckoutUrl' => 'true',
             ],
         ];
         if ($credentials->subMerchantId !== null) {
@@ -157,6 +176,13 @@ final class DanaSandboxIpgCashierUatService
 
         $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $signature = $this->signatureService->signTransactional('POST', self::IpgCreateOrderPath, $body, $timestamp, $credentials->privateKey);
+
+        Log::debug('UAT DANA Cashier Pay Missing Timestamp Request.', [
+            'endpoint' => self::IpgCreateOrderPath,
+            'partner_reference_no' => $reference,
+            'valid_up_to' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+            'support_deep_link' => 'true',
+        ]);
 
         try {
             $response = Http::acceptJson()
@@ -190,6 +216,13 @@ final class DanaSandboxIpgCashierUatService
             ? $data['requestID']
             : ($response->header('X-Request-ID') ?? $response->header('Request-Id'));
 
+        Log::debug('UAT DANA Cashier Pay Missing Timestamp Response.', [
+            'http_status' => $response->status(),
+            'response_code' => $responseCode,
+            'passed' => $passed,
+            'request_id' => $requestId,
+        ]);
+
         return [
             'scenario' => 'ipg_create_order_missing_x_timestamp',
             'passed' => $passed,
@@ -207,6 +240,8 @@ final class DanaSandboxIpgCashierUatService
                 'partner_reference_no' => $reference,
                 'amount_value' => $this->amountFormatter->formatIdr(10000),
                 'currency' => 'IDR',
+                'valid_up_to' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+                'support_deep_link_checkout_url' => 'true',
                 'order_title' => 'UAT IPG Missing Timestamp',
                 'scenario' => 'REDIRECT',
                 'partner_id' => $credentials->partnerId,

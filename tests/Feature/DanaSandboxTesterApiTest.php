@@ -7,6 +7,8 @@ use App\Models\InternalMerchantProvisioningRequest;
 use App\Models\Merchant;
 use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
+use App\Services\DanaSnapSignatureService;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
@@ -262,6 +264,8 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonPath('data.uat.passed', true)
             ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
             ->assertJsonPath('data.uat.request.x_timestamp_sent', true)
+            ->assertJsonPath('data.uat.request.support_deep_link_checkout_url', 'true')
+            ->assertJsonStructure(['data' => ['uat' => ['request' => ['valid_up_to']]]])
             ->assertJsonPath('data.uat.received.http_status', 200)
             ->assertJsonPath('data.uat.received.response_code', '2005400')
             ->assertJsonPath('data.uat.received.response_message', 'Successful')
@@ -277,11 +281,31 @@ class DanaSandboxTesterApiTest extends TestCase
             'operation' => 'ipg_create_order_success_tested',
             'status' => 'succeeded',
         ]);
-        Http::assertSent(fn (Request $request): bool => $request->method() === 'POST'
-            && $request->url() === 'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host'
-            && $request->hasHeader('X-TIMESTAMP')
-            && $request->hasHeader('X-SIGNATURE')
-            && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001'));
+        Http::assertSent(function (Request $request): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+            $validUpTo = Carbon::parse($payload['validUpTo']);
+            $diffMinutes = (int) round(now('Asia/Jakarta')->diffInSeconds($validUpTo) / 60);
+
+            $signatureService = app(DanaSnapSignatureService::class);
+            $sigValid = $signatureService->verifyTransactional(
+                'POST',
+                '/rest/redirection/v1.0/debit/payment-host-to-host',
+                $request->body(),
+                $request->header('X-TIMESTAMP')[0] ?? '',
+                $request->header('X-SIGNATURE')[0] ?? '',
+                DanaSandboxKeyMaterialFixture::PublicKey,
+            );
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host'
+                && $request->hasHeader('X-TIMESTAMP')
+                && $request->hasHeader('X-SIGNATURE')
+                && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
+                && ($payload['additionalInfo']['supportDeepLinkCheckoutUrl'] ?? null) === 'true'
+                && ($payload['additionalInfo']['envInfo']['sourcePlatform'] ?? null) === 'IPG'
+                && $diffMinutes >= 14 && $diffMinutes <= 16
+                && $sigValid === true;
+        });
     }
 
     public function test_ipg_missing_timestamp_uat_omits_x_timestamp_header_and_expects_4005402(): void
@@ -304,6 +328,8 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonPath('data.uat.passed', true)
             ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
             ->assertJsonPath('data.uat.request.x_timestamp_sent', false)
+            ->assertJsonPath('data.uat.request.support_deep_link_checkout_url', 'true')
+            ->assertJsonStructure(['data' => ['uat' => ['request' => ['valid_up_to']]]])
             ->assertJsonPath('data.uat.received.http_status', 400)
             ->assertJsonPath('data.uat.received.response_code', '4005402')
             ->assertJsonPath('data.uat.received.response_message', 'Invalid Mandatory Field X-TIMESTAMP')
@@ -317,11 +343,20 @@ class DanaSandboxTesterApiTest extends TestCase
             'operation' => 'ipg_create_order_missing_ts_tested',
             'status' => 'succeeded',
         ]);
-        Http::assertSent(fn (Request $request): bool => $request->method() === 'POST'
-            && $request->url() === 'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host'
-            && ! $request->hasHeader('X-TIMESTAMP')
-            && $request->hasHeader('X-SIGNATURE')
-            && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001'));
+        Http::assertSent(function (Request $request): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+            $validUpTo = Carbon::parse($payload['validUpTo']);
+            $diffMinutes = (int) round(now('Asia/Jakarta')->diffInSeconds($validUpTo) / 60);
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host'
+                && ! $request->hasHeader('X-TIMESTAMP')
+                && $request->hasHeader('X-SIGNATURE')
+                && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
+                && ($payload['additionalInfo']['supportDeepLinkCheckoutUrl'] ?? null) === 'true'
+                && ($payload['additionalInfo']['envInfo']['sourcePlatform'] ?? null) === 'IPG'
+                && $diffMinutes >= 14 && $diffMinutes <= 16;
+        });
     }
 
     public function test_ipg_create_order_success_records_safe_failure_run_when_dana_returns_error(): void
