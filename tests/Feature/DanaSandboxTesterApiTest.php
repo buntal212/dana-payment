@@ -674,6 +674,102 @@ class DanaSandboxTesterApiTest extends TestCase
         ]);
     }
 
+    public function test_ipg_inconsistent_request_uat_sends_two_requests_with_same_reference_different_amounts_and_expects_4045418(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+
+        Http::fake([
+            'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host' => Http::sequence()
+                ->push([
+                    'responseCode' => '2005400',
+                    'responseMessage' => 'Successful',
+                    'referenceNo' => 'DANA-REF-INC-001',
+                    'webRedirectUrl' => 'https://sandbox.dana.id/checkout/inc-001',
+                ], 200, ['X-Request-ID' => 'uat-inc-ipg-001'])
+                ->push([
+                    'responseCode' => '4045418',
+                    'responseMessage' => 'Inconsistent Request',
+                ], 404, ['X-Request-ID' => 'uat-inc-ipg-002']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgInconsistentRequestUatUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.uat.scenario', 'ipg_create_order_inconsistent_request')
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.first_request.response_code', '2005400')
+            ->assertJsonPath('data.uat.first_request.amount', '10000.00')
+            ->assertJsonPath('data.uat.second_request.response_code', '4045418')
+            ->assertJsonPath('data.uat.second_request.amount', '20000.00')
+            ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
+            ->assertJsonPath('data.uat.request.product_code', '51051000100000000001')
+            ->assertJsonPath('data.uat.request.support_deep_link_checkout_url', 'true')
+            ->assertDontSee(DanaSandboxKeyMaterialFixture::PrivateKey);
+
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseCount('dana_sandbox_test_runs', 1);
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->getKey(),
+            'operation' => 'ipg_create_order_inconsistent_tested',
+            'status' => 'failed',
+        ]);
+
+        Http::assertSentCount(2);
+
+        $recorded = Http::recorded();
+        $req1 = $recorded[0][0];
+        $req2 = $recorded[1][0];
+
+        $payload1 = json_decode($req1->body(), true, flags: JSON_THROW_ON_ERROR);
+        $payload2 = json_decode($req2->body(), true, flags: JSON_THROW_ON_ERROR);
+
+        $this->assertSame($payload1['partnerReferenceNo'], $payload2['partnerReferenceNo']);
+        $this->assertSame('10000.00', $payload1['amount']['value']);
+        $this->assertSame('20000.00', $payload2['amount']['value']);
+        $this->assertNotSame($req1->header('X-EXTERNAL-ID')[0] ?? '', $req2->header('X-EXTERNAL-ID')[0] ?? '');
+
+        $signatureService = app(DanaSnapSignatureService::class);
+        $sig1Valid = $signatureService->verifyTransactional('POST', '/rest/redirection/v1.0/debit/payment-host-to-host', $req1->body(), $req1->header('X-TIMESTAMP')[0] ?? '', $req1->header('X-SIGNATURE')[0] ?? '', DanaSandboxKeyMaterialFixture::PublicKey);
+        $sig2Valid = $signatureService->verifyTransactional('POST', '/rest/redirection/v1.0/debit/payment-host-to-host', $req2->body(), $req2->header('X-TIMESTAMP')[0] ?? '', $req2->header('X-SIGNATURE')[0] ?? '', DanaSandboxKeyMaterialFixture::PublicKey);
+
+        $this->assertTrue($sig1Valid);
+        $this->assertTrue($sig2Valid);
+    }
+
+    public function test_ipg_inconsistent_request_stops_when_first_request_fails(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+
+        Http::fake([
+            'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host' => Http::response([
+                'responseCode' => '5005400',
+                'responseMessage' => 'General Error',
+            ], 500, ['X-Request-ID' => 'uat-ipg-general-001']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgInconsistentRequestUatUrl($merchant))
+            ->assertOk()
+            ->assertJsonPath('data.uat.scenario', 'ipg_create_order_inconsistent_request')
+            ->assertJsonPath('data.uat.passed', false)
+            ->assertJsonPath('data.uat.first_request.response_code', '5005400')
+            ->assertJsonPath('data.uat.second_request', null);
+
+        Http::assertSentCount(1);
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseCount('dana_sandbox_test_runs', 1);
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->getKey(),
+            'operation' => 'ipg_create_order_inconsistent_tested',
+            'status' => 'failed',
+        ]);
+    }
+
     public function test_debit_status_transaction_not_found_uat_sends_signed_request_with_fictitious_reference_and_expects_4045501(): void
     {
         $merchant = $this->managedMerchant();
@@ -1358,6 +1454,11 @@ class DanaSandboxTesterApiTest extends TestCase
     private function ipgInvalidMerchantUatUrl(Merchant $merchant): string
     {
         return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/ipg-create-order-invalid-merchant";
+    }
+
+    private function ipgInconsistentRequestUatUrl(Merchant $merchant): string
+    {
+        return "/api/v1/internal/merchants/{$merchant->id}/sandbox-tester/uat/ipg-create-order-inconsistent-request";
     }
 
     private function debitStatusNotFoundUatUrl(Merchant $merchant): string

@@ -315,6 +315,66 @@ class DanaSandboxTesterService
     }
 
     /** @return array<string, mixed> */
+    public function testIpgCreateOrderInconsistentRequest(Merchant $merchant, string $serviceId): array
+    {
+        $this->assertTesterCanAccessMerchant($merchant, $serviceId);
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        $validation = $this->configurationValidation($config);
+        if ($validation['format_valid'] !== true || $config === null) {
+            throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT IPG Cashier Pay.');
+        }
+
+        try {
+            $uat = $this->ipgCashierUatService->inconsistentRequest($config);
+        } catch (\LogicException|\RuntimeException $exception) {
+            $this->safeRecordRun(
+                $merchant,
+                'ipg_create_order_inconsistent_tested',
+                'failed',
+                'UAT IPG Cashier Pay Inconsistent Request belum dapat dieksekusi: '.$exception->getMessage(),
+                ['endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host', 'passed' => false, 'transaction_status' => 'FAILED']
+            );
+
+            throw $exception;
+        }
+
+        $passed = ($uat['passed'] ?? false) === true;
+        $received = is_array($uat['received'] ?? null) ? $uat['received'] : [];
+        $firstReq = is_array($uat['first_request'] ?? null) ? $uat['first_request'] : [];
+        $secondReq = is_array($uat['second_request'] ?? null) ? $uat['second_request'] : [];
+        $req = is_array($uat['request'] ?? null) ? $uat['request'] : [];
+
+        $this->safeRecordRun(
+            $merchant,
+            'ipg_create_order_inconsistent_tested',
+            'failed',
+            $passed
+                ? 'UAT IPG Cashier Pay Inconsistent Request (4045418) berhasil memverifikasi transaksi gagal (FAILED).'
+                : 'UAT IPG Cashier Pay Inconsistent Request (4045418) tidak mengembalikan kode yang diharapkan.',
+            [
+                'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                'partner_reference_no' => $req['partner_reference_no'] ?? null,
+                'first_amount' => $req['first_amount'] ?? '10000.00',
+                'second_amount' => $req['second_amount'] ?? '20000.00',
+                'http_status' => $received['http_status'] ?? null,
+                'response_code' => $received['response_code'] ?? null,
+                'response_message' => $received['response_message'] ?? null,
+                'request_id' => $received['request_id'] ?? null,
+                'first_response_code' => $firstReq['response_code'] ?? null,
+                'second_response_code' => $secondReq['response_code'] ?? null,
+                'passed' => $passed,
+                'transaction_status' => 'FAILED',
+            ]
+        );
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'uat' => $uat,
+        ];
+    }
+
+    /** @return array<string, mixed> */
     public function testIpgCreateOrderMissingTimestamp(Merchant $merchant, string $serviceId): array
     {
         $this->assertTesterCanAccessMerchant($merchant, $serviceId);
