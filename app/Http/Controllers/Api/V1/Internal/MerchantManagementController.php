@@ -84,6 +84,12 @@ class MerchantManagementController extends Controller
             ->header('Cache-Control', 'no-store');
     }
 
+    public function testIpgCreateOrderTransactionNotPermitted(Merchant $merchant, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        return response()->json(['data' => $testerService->testIpgCreateOrderTransactionNotPermitted($merchant, $this->serviceId())])
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function testDebitStatusTransactionNotFound(Merchant $merchant, DanaSandboxTesterService $testerService): JsonResponse
     {
         return response()->json(['data' => $testerService->testDebitStatusTransactionNotFound($merchant, $this->serviceId())])

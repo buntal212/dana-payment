@@ -377,4 +377,124 @@ final class DanaSandboxIpgCashierUatService
             ],
         ];
     }
+
+    /**
+     * Executes an official, transient Sandbox IPG Cashier Pay request with amount 435415.00
+     * to simulate "Transaction is not permitted". Expects responseCode 4035415 and responseMessage "Transaction Not Permitted".
+     * It never creates a local Payment or Invoice record.
+     *
+     * @return array{scenario: string, passed: bool, expected: array{response_code: string, response_message: string}, received: array{http_status: int, response_code: string|null, response_message: string, request_id: string|null}, request: array<string, mixed>}
+     */
+    public function transactionNotPermitted(MerchantPaymentConfig $config): array
+    {
+        if ($config->environment !== 'sandbox' || $config->provider !== 'dana') {
+            throw new \LogicException('UAT IPG Cashier Pay hanya tersedia untuk konfigurasi DANA Sandbox.');
+        }
+
+        $credentials = $this->credentialResolver->resolve($config);
+        $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
+        $expiresAt = now('Asia/Jakarta')->addMinutes(15);
+        $reference = (string) Str::ulid();
+        $externalId = (string) Str::ulid();
+        $payload = [
+            'partnerReferenceNo' => $reference,
+            'merchantId' => $credentials->merchantId,
+            'amount' => ['value' => $this->amountFormatter->formatIdr(435415), 'currency' => 'IDR'],
+            'validUpTo' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+            'urlParams' => [
+                ['url' => $credentials->returnUrl, 'type' => 'PAY_RETURN', 'isDeeplink' => 'N'],
+                ['url' => $credentials->notificationUrl, 'type' => 'NOTIFICATION', 'isDeeplink' => 'N'],
+            ],
+            'additionalInfo' => [
+                'order' => ['orderTitle' => 'UAT IPG Cashier Not Permitted', 'scenario' => 'REDIRECT'],
+                'mcc' => $credentials->mcc,
+                'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
+                'productCode' => self::DefaultCashierProductCode,
+                'supportDeepLinkCheckoutUrl' => 'true',
+            ],
+        ];
+        if ($credentials->subMerchantId !== null) {
+            $payload['subMerchantId'] = $credentials->subMerchantId;
+        }
+
+        $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        $signature = $this->signatureService->signTransactional('POST', self::IpgCreateOrderPath, $body, $timestamp, $credentials->privateKey);
+
+        Log::debug('UAT DANA Cashier Pay Transaction Not Permitted Request.', [
+            'endpoint' => self::IpgCreateOrderPath,
+            'partner_reference_no' => $reference,
+            'amount_value' => '435415.00',
+            'valid_up_to' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+            'product_code' => self::DefaultCashierProductCode,
+            'support_deep_link' => 'true',
+        ]);
+
+        try {
+            $response = Http::acceptJson()
+                ->timeout((int) config('services.dana.timeout', 8))
+                ->connectTimeout((int) config('services.dana.connect_timeout', 3))
+                ->withHeaders([
+                    'X-TIMESTAMP' => $timestamp,
+                    'X-SIGNATURE' => $signature,
+                    'ORIGIN' => $credentials->origin,
+                    'X-PARTNER-ID' => $credentials->partnerId,
+                    'X-EXTERNAL-ID' => $externalId,
+                    'CHANNEL-ID' => $credentials->channelId,
+                ])
+                ->withBody($body, 'application/json')
+                ->post(rtrim((string) config('services.dana.base_url'), '/').self::IpgCreateOrderPath);
+        } catch (ConnectionException $exception) {
+            throw new RuntimeException('UAT IPG Cashier Pay DANA Sandbox tidak dapat dihubungi.', previous: $exception);
+        }
+
+        $data = $response->json();
+        $data = is_array($data) ? $data : [];
+        $responseCode = is_string($data['responseCode'] ?? null) && preg_match('/\\A\\d{7}\\z/', $data['responseCode']) === 1
+            ? $data['responseCode']
+            : null;
+        $expectedCode = '4035415';
+        $expectedMessage = 'Transaction Not Permitted';
+        $actualMessage = is_string($data['responseMessage'] ?? null)
+            ? $data['responseMessage']
+            : null;
+        $passed = $responseCode === $expectedCode;
+        $requestId = is_string($data['requestID'] ?? null)
+            ? $data['requestID']
+            : ($response->header('X-Request-ID') ?? $response->header('Request-Id'));
+
+        Log::debug('UAT DANA Cashier Pay Transaction Not Permitted Response.', [
+            'http_status' => $response->status(),
+            'response_code' => $responseCode,
+            'passed' => $passed,
+            'request_id' => $requestId,
+        ]);
+
+        return [
+            'scenario' => 'ipg_create_order_transaction_not_permitted',
+            'passed' => $passed,
+            'expected' => ['response_code' => $expectedCode, 'response_message' => $expectedMessage],
+            'received' => [
+                'http_status' => $response->status(),
+                'response_code' => $responseCode,
+                'response_message' => $actualMessage ?? ($passed ? $expectedMessage : 'Respons DANA tidak sesuai ekspektasi UAT.'),
+                'request_id' => is_string($requestId) && preg_match('/\\A[A-Za-z0-9._-]{1,128}\\z/', $requestId) === 1 ? $requestId : null,
+            ],
+            'request' => [
+                'endpoint' => self::IpgCreateOrderPath,
+                'http_method' => 'POST',
+                'x_timestamp_sent' => true,
+                'partner_reference_no' => $reference,
+                'amount_value' => $this->amountFormatter->formatIdr(435415),
+                'currency' => 'IDR',
+                'valid_up_to' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+                'support_deep_link_checkout_url' => 'true',
+                'product_code' => self::DefaultCashierProductCode,
+                'order_title' => 'UAT IPG Cashier Not Permitted',
+                'scenario' => 'REDIRECT',
+                'partner_id' => $credentials->partnerId,
+                'channel_id' => $credentials->channelId,
+                'origin' => $credentials->origin,
+            ],
+        ];
+    }
 }
