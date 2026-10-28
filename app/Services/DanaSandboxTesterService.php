@@ -262,6 +262,59 @@ class DanaSandboxTesterService
     }
 
     /** @return array<string, mixed> */
+    public function testIpgCreateOrderInvalidMerchant(Merchant $merchant, string $serviceId): array
+    {
+        $this->assertTesterCanAccessMerchant($merchant, $serviceId);
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        $validation = $this->configurationValidation($config);
+        if ($validation['format_valid'] !== true || $config === null) {
+            throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT IPG Cashier Pay.');
+        }
+
+        try {
+            $uat = $this->ipgCashierUatService->invalidMerchant($config);
+        } catch (\LogicException|\RuntimeException $exception) {
+            $this->safeRecordRun(
+                $merchant,
+                'ipg_create_order_invalid_merchant_tested',
+                'failed',
+                'UAT IPG Cashier Pay Invalid Merchant belum dapat dieksekusi: '.$exception->getMessage(),
+                ['endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host', 'amount_value' => '445408.00', 'passed' => false, 'transaction_status' => 'FAILED']
+            );
+
+            throw $exception;
+        }
+
+        $passed = ($uat['passed'] ?? false) === true;
+        $received = is_array($uat['received'] ?? null) ? $uat['received'] : [];
+
+        $this->safeRecordRun(
+            $merchant,
+            'ipg_create_order_invalid_merchant_tested',
+            'failed',
+            $passed
+                ? 'UAT IPG Cashier Pay Invalid Merchant (4045408) berhasil memverifikasi transaksi gagal (FAILED).'
+                : 'UAT IPG Cashier Pay Invalid Merchant (4045408) tidak mengembalikan kode yang diharapkan.',
+            [
+                'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                'amount_value' => '445408.00',
+                'http_status' => $received['http_status'] ?? null,
+                'response_code' => $received['response_code'] ?? null,
+                'response_message' => $received['response_message'] ?? null,
+                'request_id' => $received['request_id'] ?? null,
+                'passed' => $passed,
+                'transaction_status' => 'FAILED',
+            ]
+        );
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'uat' => $uat,
+        ];
+    }
+
+    /** @return array<string, mixed> */
     public function testIpgCreateOrderMissingTimestamp(Merchant $merchant, string $serviceId): array
     {
         $this->assertTesterCanAccessMerchant($merchant, $serviceId);
