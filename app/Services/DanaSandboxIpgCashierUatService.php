@@ -105,7 +105,16 @@ final class DanaSandboxIpgCashierUatService
             ],
             'request' => [
                 'endpoint' => self::IpgCreateOrderPath,
+                'http_method' => 'POST',
                 'x_timestamp_sent' => true,
+                'partner_reference_no' => $reference,
+                'amount_value' => $this->amountFormatter->formatIdr(10000),
+                'currency' => 'IDR',
+                'order_title' => 'UAT IPG Cashier Success',
+                'scenario' => 'REDIRECT',
+                'partner_id' => $credentials->partnerId,
+                'channel_id' => $credentials->channelId,
+                'origin' => $credentials->origin,
             ],
         ];
     }
@@ -193,7 +202,16 @@ final class DanaSandboxIpgCashierUatService
             ],
             'request' => [
                 'endpoint' => self::IpgCreateOrderPath,
+                'http_method' => 'POST',
                 'x_timestamp_sent' => false,
+                'partner_reference_no' => $reference,
+                'amount_value' => $this->amountFormatter->formatIdr(10000),
+                'currency' => 'IDR',
+                'order_title' => 'UAT IPG Missing Timestamp',
+                'scenario' => 'REDIRECT',
+                'partner_id' => $credentials->partnerId,
+                'channel_id' => $credentials->channelId,
+                'origin' => $credentials->origin,
             ],
         ];
     }

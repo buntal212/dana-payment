@@ -10,6 +10,7 @@ use App\Models\Payment;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
@@ -112,10 +113,45 @@ class DanaSandboxTesterService
             throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT IPG Cashier Pay.');
         }
 
+        try {
+            $uat = $this->ipgCashierUatService->createOrderSuccess($config);
+        } catch (\LogicException|\RuntimeException $exception) {
+            $this->safeRecordRun(
+                $merchant,
+                'ipg_create_order_success_tested',
+                'failed',
+                'UAT IPG Cashier Pay Create Order belum dapat dieksekusi: '.$exception->getMessage(),
+                ['endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host', 'passed' => false]
+            );
+
+            throw $exception;
+        }
+
+        $passed = ($uat['passed'] ?? false) === true;
+        $received = is_array($uat['received'] ?? null) ? $uat['received'] : [];
+
+        $this->safeRecordRun(
+            $merchant,
+            'ipg_create_order_success_tested',
+            $passed ? 'succeeded' : 'failed',
+            $passed
+                ? 'UAT IPG Cashier Pay Create Order (2005400) berhasil diverifikasi.'
+                : 'UAT IPG Cashier Pay Create Order (2005400) tidak mengembalikan kode yang diharapkan.',
+            [
+                'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                'http_status' => $received['http_status'] ?? null,
+                'response_code' => $received['response_code'] ?? null,
+                'response_message' => $received['response_message'] ?? null,
+                'reference_no' => $received['reference_no'] ?? null,
+                'request_id' => $received['request_id'] ?? null,
+                'passed' => $passed,
+            ]
+        );
+
         return [
             'merchant_code' => $merchant->code,
             'environment' => 'sandbox',
-            'uat' => $this->ipgCashierUatService->createOrderSuccess($config),
+            'uat' => $uat,
         ];
     }
 
@@ -129,10 +165,44 @@ class DanaSandboxTesterService
             throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT IPG Cashier Pay.');
         }
 
+        try {
+            $uat = $this->ipgCashierUatService->missingTimestamp($config);
+        } catch (\LogicException|\RuntimeException $exception) {
+            $this->safeRecordRun(
+                $merchant,
+                'ipg_create_order_missing_ts_tested',
+                'failed',
+                'UAT IPG Cashier Pay tanpa X-TIMESTAMP belum dapat dieksekusi: '.$exception->getMessage(),
+                ['endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host', 'passed' => false]
+            );
+
+            throw $exception;
+        }
+
+        $passed = ($uat['passed'] ?? false) === true;
+        $received = is_array($uat['received'] ?? null) ? $uat['received'] : [];
+
+        $this->safeRecordRun(
+            $merchant,
+            'ipg_create_order_missing_ts_tested',
+            $passed ? 'succeeded' : 'failed',
+            $passed
+                ? 'UAT IPG Cashier Pay tanpa X-TIMESTAMP (4005402) berhasil diverifikasi.'
+                : 'UAT IPG Cashier Pay tanpa X-TIMESTAMP (4005402) tidak mengembalikan kode yang diharapkan.',
+            [
+                'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
+                'http_status' => $received['http_status'] ?? null,
+                'response_code' => $received['response_code'] ?? null,
+                'response_message' => $received['response_message'] ?? null,
+                'request_id' => $received['request_id'] ?? null,
+                'passed' => $passed,
+            ]
+        );
+
         return [
             'merchant_code' => $merchant->code,
             'environment' => 'sandbox',
-            'uat' => $this->ipgCashierUatService->missingTimestamp($config),
+            'uat' => $uat,
         ];
     }
 
@@ -793,6 +863,20 @@ class DanaSandboxTesterService
         return $this->configured($value)
             && filter_var($value, FILTER_VALIDATE_URL) !== false
             && str_starts_with(strtolower($value), 'https://');
+    }
+
+    /** @param array<string, bool|int|string|null> $safeDetails */
+    private function safeRecordRun(Merchant $merchant, string $operation, string $status, string $message, array $safeDetails, ?Payment $payment = null): void
+    {
+        try {
+            $this->recordRun($merchant, $operation, $status, $message, $safeDetails, $payment);
+        } catch (\Throwable $exception) {
+            Log::warning('Gagal mencatat riwayat pengujian Sandbox DANA.', [
+                'merchant_id' => $merchant->getKey(),
+                'operation' => $operation,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     /** @param array<string, bool|int|string|null> $safeDetails */
