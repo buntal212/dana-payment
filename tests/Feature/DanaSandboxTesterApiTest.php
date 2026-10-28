@@ -265,6 +265,7 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
             ->assertJsonPath('data.uat.request.x_timestamp_sent', true)
             ->assertJsonPath('data.uat.request.support_deep_link_checkout_url', 'true')
+            ->assertJsonPath('data.uat.request.product_code', '51051000100000000001')
             ->assertJsonStructure(['data' => ['uat' => ['request' => ['valid_up_to']]]])
             ->assertJsonPath('data.uat.received.http_status', 200)
             ->assertJsonPath('data.uat.received.response_code', '2005400')
@@ -302,6 +303,7 @@ class DanaSandboxTesterApiTest extends TestCase
                 && $request->hasHeader('X-SIGNATURE')
                 && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
                 && ($payload['additionalInfo']['supportDeepLinkCheckoutUrl'] ?? null) === 'true'
+                && ($payload['additionalInfo']['productCode'] ?? null) === '51051000100000000001'
                 && ($payload['additionalInfo']['envInfo']['sourcePlatform'] ?? null) === 'IPG'
                 && $diffMinutes >= 14 && $diffMinutes <= 16
                 && $sigValid === true;
@@ -329,6 +331,7 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
             ->assertJsonPath('data.uat.request.x_timestamp_sent', false)
             ->assertJsonPath('data.uat.request.support_deep_link_checkout_url', 'true')
+            ->assertJsonPath('data.uat.request.product_code', '51051000100000000001')
             ->assertJsonStructure(['data' => ['uat' => ['request' => ['valid_up_to']]]])
             ->assertJsonPath('data.uat.received.http_status', 400)
             ->assertJsonPath('data.uat.received.response_code', '4005402')
@@ -354,6 +357,7 @@ class DanaSandboxTesterApiTest extends TestCase
                 && $request->hasHeader('X-SIGNATURE')
                 && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
                 && ($payload['additionalInfo']['supportDeepLinkCheckoutUrl'] ?? null) === 'true'
+                && ($payload['additionalInfo']['productCode'] ?? null) === '51051000100000000001'
                 && ($payload['additionalInfo']['envInfo']['sourcePlatform'] ?? null) === 'IPG'
                 && $diffMinutes >= 14 && $diffMinutes <= 16;
         });

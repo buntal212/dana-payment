@@ -12,6 +12,7 @@ use RuntimeException;
 final class DanaSandboxIpgCashierUatService
 {
     private const string IpgCreateOrderPath = '/rest/redirection/v1.0/debit/payment-host-to-host';
+    private const string DefaultCashierProductCode = '51051000100000000001';
 
     public function __construct(
         private readonly DanaCredentialResolver $credentialResolver,
@@ -50,6 +51,7 @@ final class DanaSandboxIpgCashierUatService
                 'order' => ['orderTitle' => 'UAT IPG Cashier Success', 'scenario' => 'REDIRECT'],
                 'mcc' => $credentials->mcc,
                 'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
+                'productCode' => self::DefaultCashierProductCode,
                 'supportDeepLinkCheckoutUrl' => 'true',
             ],
         ];
@@ -64,6 +66,7 @@ final class DanaSandboxIpgCashierUatService
             'endpoint' => self::IpgCreateOrderPath,
             'partner_reference_no' => $reference,
             'valid_up_to' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+            'product_code' => self::DefaultCashierProductCode,
             'support_deep_link' => 'true',
         ]);
 
@@ -128,6 +131,7 @@ final class DanaSandboxIpgCashierUatService
                 'currency' => 'IDR',
                 'valid_up_to' => $expiresAt->format('Y-m-d\\TH:i:sP'),
                 'support_deep_link_checkout_url' => 'true',
+                'product_code' => self::DefaultCashierProductCode,
                 'order_title' => 'UAT IPG Cashier Success',
                 'scenario' => 'REDIRECT',
                 'partner_id' => $credentials->partnerId,
@@ -167,6 +171,7 @@ final class DanaSandboxIpgCashierUatService
                 'order' => ['orderTitle' => 'UAT IPG Missing Timestamp', 'scenario' => 'REDIRECT'],
                 'mcc' => $credentials->mcc,
                 'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
+                'productCode' => self::DefaultCashierProductCode,
                 'supportDeepLinkCheckoutUrl' => 'true',
             ],
         ];
@@ -181,6 +186,7 @@ final class DanaSandboxIpgCashierUatService
             'endpoint' => self::IpgCreateOrderPath,
             'partner_reference_no' => $reference,
             'valid_up_to' => $expiresAt->format('Y-m-d\\TH:i:sP'),
+            'product_code' => self::DefaultCashierProductCode,
             'support_deep_link' => 'true',
         ]);
 
@@ -242,6 +248,7 @@ final class DanaSandboxIpgCashierUatService
                 'currency' => 'IDR',
                 'valid_up_to' => $expiresAt->format('Y-m-d\\TH:i:sP'),
                 'support_deep_link_checkout_url' => 'true',
+                'product_code' => self::DefaultCashierProductCode,
                 'order_title' => 'UAT IPG Missing Timestamp',
                 'scenario' => 'REDIRECT',
                 'partner_id' => $credentials->partnerId,
