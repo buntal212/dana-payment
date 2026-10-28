@@ -45,6 +45,8 @@ Route::prefix('v1/internal')->group(function (): void {
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::post('merchants/{merchant}/sandbox-tester/uat/ipg-create-order-missing-timestamp', [MerchantManagementController::class, 'testIpgCreateOrderMissingTimestamp'])
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
+    Route::post('merchants/{merchant}/sandbox-tester/uat/ipg-create-order-general-error', [MerchantManagementController::class, 'testIpgCreateOrderGeneralError'])
+        ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::post('merchants/{merchant}/sandbox-tester/uat/debit-status-transaction-not-found', [MerchantManagementController::class, 'testDebitStatusTransactionNotFound'])
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::post('merchants/{merchant}/sandbox-tester/uat/debit-status-missing-timestamp', [MerchantManagementController::class, 'testDebitStatusMissingTimestamp'])
