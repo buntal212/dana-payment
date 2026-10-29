@@ -111,15 +111,12 @@ class MerchantManagementController extends Controller
     public function testIpgCreateOrderExceedsAmountLimit(Merchant $merchant, Request $request, DanaSandboxTesterService $testerService): JsonResponse
     {
         $validated = $request->validate([
-            'amount' => ['nullable', 'in:10000000,5000000000,10000000.00,5000000000.00'],
+            'amount' => ['nullable', 'integer', 'min:1', 'max:10000000000'],
         ]);
 
-        $rawAmount = $validated['amount'] ?? null;
-        $amount = match ((string) $rawAmount) {
-            '10000000', '10000000.00' => 10000000,
-            '5000000000', '5000000000.00' => 5000000000,
-            default => null,
-        };
+        $amount = array_key_exists('amount', $validated) && $validated['amount'] !== null
+            ? (int) $validated['amount']
+            : 10000001;
 
         return response()->json(['data' => $testerService->testIpgCreateOrderExceedsAmountLimit($merchant, $this->serviceId(), $amount)])
             ->header('Cache-Control', 'no-store');

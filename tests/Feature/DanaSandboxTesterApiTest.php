@@ -902,7 +902,7 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonPath('data.uat.passed', true)
             ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
             ->assertJsonPath('data.uat.request.x_timestamp_sent', true)
-            ->assertJsonPath('data.uat.request.amount_value', '5000000000.00')
+            ->assertJsonPath('data.uat.request.amount_value', '10000001.00')
             ->assertJsonPath('data.uat.request.support_deep_link_checkout_url', 'true')
             ->assertJsonPath('data.uat.request.product_code', '51051000100000000001')
             ->assertJsonPath('data.uat.received.http_status', 403)
@@ -939,7 +939,7 @@ class DanaSandboxTesterApiTest extends TestCase
                 && $request->hasHeader('X-TIMESTAMP')
                 && $request->hasHeader('X-SIGNATURE')
                 && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
-                && ($payload['amount']['value'] ?? null) === '5000000000.00'
+                && ($payload['amount']['value'] ?? null) === '10000001.00'
                 && ($payload['additionalInfo']['supportDeepLinkCheckoutUrl'] ?? null) === 'true'
                 && ($payload['additionalInfo']['productCode'] ?? null) === '51051000100000000001'
                 && ($payload['additionalInfo']['envInfo']['sourcePlatform'] ?? null) === 'IPG'
@@ -1042,14 +1042,61 @@ class DanaSandboxTesterApiTest extends TestCase
         });
     }
 
+    public function test_ipg_exceeds_amount_limit_uat_supports_admin_custom_manual_nominal(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host' => Http::response([
+                'responseCode' => '4035402',
+                'responseMessage' => 'Exceeds Transaction Amount Limit',
+            ], 403, ['X-Request-ID' => 'uat-ipg-limit-custom']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgExceedsAmountLimitUatUrl($merchant), ['amount' => 25000000])
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.uat.scenario', 'ipg_create_order_exceeds_amount_limit')
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.request.amount_value', '25000000.00')
+            ->assertJsonPath('data.uat.received.response_code', '4035402');
+
+        Http::assertSent(function (Request $request): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+
+            return ($payload['amount']['value'] ?? null) === '25000000.00';
+        });
+    }
+
     public function test_ipg_exceeds_amount_limit_uat_rejects_invalid_amount_option_with_422(): void
     {
         $merchant = $this->managedMerchant();
         $this->validConfiguration($merchant);
         Http::preventStrayRequests();
 
+        // Zero
         $this->withToken(self::ServiceToken)
-            ->postJson($this->ipgExceedsAmountLimitUatUrl($merchant), ['amount' => 999999])
+            ->postJson($this->ipgExceedsAmountLimitUatUrl($merchant), ['amount' => 0])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['amount']);
+
+        // Negative
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgExceedsAmountLimitUatUrl($merchant), ['amount' => -100])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['amount']);
+
+        // Non-integer float
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgExceedsAmountLimitUatUrl($merchant), ['amount' => 1000.5])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['amount']);
+
+        // Exceeds safe limit (above 10 Billion)
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgExceedsAmountLimitUatUrl($merchant), ['amount' => 10000000001])
             ->assertStatus(422)
             ->assertJsonValidationErrors(['amount']);
     }
