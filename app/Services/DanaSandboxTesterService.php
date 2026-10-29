@@ -437,9 +437,10 @@ class DanaSandboxTesterService
             throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT IPG Cashier Pay.');
         }
 
-        $targetAmount = match ((int) $amount) {
-            10000000 => 10000000,
-            default => 5000000000,
+        $targetAmount = match ((string) $amount) {
+            '10000000', '10000000.00' => 10000000,
+            '5000000000', '5000000000.00', '', null => 5000000000,
+            default => throw new UnprocessableEntityHttpException('Nominal UAT IPG Cashier Pay Exceeds Amount Limit tidak valid. Pilihan yang didukung: Rp10.000.000 atau Rp5.000.000.000.'),
         };
         $formattedAmount = $targetAmount === 10000000 ? '10000000.00' : '5000000000.00';
 

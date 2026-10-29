@@ -1021,9 +1021,10 @@ PEM;
         $expiresAt = now('Asia/Jakarta')->addMinutes(15);
         $reference = (string) Str::ulid();
         $externalId = (string) Str::ulid();
-        $targetAmount = match ((int) $amount) {
-            10000000 => 10000000,
-            default => 5000000000,
+        $targetAmount = match ((string) $amount) {
+            '10000000', '10000000.00' => 10000000,
+            '5000000000', '5000000000.00', '', null => 5000000000,
+            default => throw new \InvalidArgumentException('Nominal UAT IPG Cashier Pay Exceeds Amount Limit tidak valid. Pilihan yang didukung: Rp10.000.000 atau Rp5.000.000.000.'),
         };
         $amountValue = $this->amountFormatter->formatIdr($targetAmount);
         $payload = [

@@ -1014,6 +1014,46 @@ class DanaSandboxTesterApiTest extends TestCase
         });
     }
 
+    public function test_ipg_exceeds_amount_limit_uat_sends_amount_5000000000_when_explicitly_requested(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host' => Http::response([
+                'responseCode' => '4035402',
+                'responseMessage' => 'Exceeds Transaction Amount Limit',
+            ], 403, ['X-Request-ID' => 'uat-ipg-limit-5b']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgExceedsAmountLimitUatUrl($merchant), ['amount' => 5000000000])
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.uat.scenario', 'ipg_create_order_exceeds_amount_limit')
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.request.amount_value', '5000000000.00')
+            ->assertJsonPath('data.uat.received.response_code', '4035402');
+
+        Http::assertSent(function (Request $request): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+
+            return ($payload['amount']['value'] ?? null) === '5000000000.00';
+        });
+    }
+
+    public function test_ipg_exceeds_amount_limit_uat_rejects_invalid_amount_option_with_422(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgExceedsAmountLimitUatUrl($merchant), ['amount' => 999999])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['amount']);
+    }
+
     public function test_ipg_exceeds_amount_limit_records_safe_failure_when_dana_does_not_return_4035402(): void
     {
         $merchant = $this->managedMerchant();
