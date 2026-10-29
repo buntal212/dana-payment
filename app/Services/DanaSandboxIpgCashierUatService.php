@@ -12,6 +12,7 @@ use RuntimeException;
 final class DanaSandboxIpgCashierUatService
 {
     private const string IpgCreateOrderPath = '/rest/redirection/v1.0/debit/payment-host-to-host';
+
     private const string DefaultCashierProductCode = '51051000100000000001';
 
     public const string TransientInvalidPrivateKey = <<<'PEM'
@@ -1003,12 +1004,13 @@ PEM;
 
     /**
      * Executes an official, transient Sandbox IPG Cashier Pay request with amount 5000000000.00
+     * (or optionally 10000000.00 based on DANA Support guidance)
      * to simulate "Exceeds Transaction Amount Limit". Expects responseCode 4035402 and responseMessage "Exceeds Transaction Amount Limit".
      * It never creates a local Payment or Invoice record.
      *
      * @return array{scenario: string, passed: bool, expected: array{response_code: string, response_message: string}, received: array{http_status: int, response_code: string|null, response_message: string, request_id: string|null}, request: array<string, mixed>}
      */
-    public function exceedsAmountLimit(MerchantPaymentConfig $config): array
+    public function exceedsAmountLimit(MerchantPaymentConfig $config, int|string|null $amount = null): array
     {
         if ($config->environment !== 'sandbox' || $config->provider !== 'dana') {
             throw new \LogicException('UAT IPG Cashier Pay hanya tersedia untuk konfigurasi DANA Sandbox.');
@@ -1019,7 +1021,11 @@ PEM;
         $expiresAt = now('Asia/Jakarta')->addMinutes(15);
         $reference = (string) Str::ulid();
         $externalId = (string) Str::ulid();
-        $amountValue = $this->amountFormatter->formatIdr(5000000000);
+        $targetAmount = match ((int) $amount) {
+            10000000 => 10000000,
+            default => 5000000000,
+        };
+        $amountValue = $this->amountFormatter->formatIdr($targetAmount);
         $payload = [
             'partnerReferenceNo' => $reference,
             'merchantId' => $credentials->merchantId,

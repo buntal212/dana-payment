@@ -7,6 +7,7 @@ use App\Models\InternalMerchantProvisioningRequest;
 use App\Models\Merchant;
 use App\Models\MerchantPaymentConfig;
 use App\Models\Payment;
+use App\Services\DanaSandboxIpgCashierUatService;
 use App\Services\DanaSnapSignatureService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -825,7 +826,7 @@ class DanaSandboxTesterApiTest extends TestCase
                 DanaSandboxKeyMaterialFixture::PublicKey,
             );
 
-            $transientPrivRes = openssl_pkey_get_private(\App\Services\DanaSandboxIpgCashierUatService::TransientInvalidPrivateKey);
+            $transientPrivRes = openssl_pkey_get_private(DanaSandboxIpgCashierUatService::TransientInvalidPrivateKey);
             $transientPubKey = openssl_pkey_get_details($transientPrivRes)['key'];
             $sigValidTransientKey = $signatureService->verifyTransactional(
                 'POST',
@@ -939,6 +940,72 @@ class DanaSandboxTesterApiTest extends TestCase
                 && $request->hasHeader('X-SIGNATURE')
                 && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
                 && ($payload['amount']['value'] ?? null) === '5000000000.00'
+                && ($payload['additionalInfo']['supportDeepLinkCheckoutUrl'] ?? null) === 'true'
+                && ($payload['additionalInfo']['productCode'] ?? null) === '51051000100000000001'
+                && ($payload['additionalInfo']['envInfo']['sourcePlatform'] ?? null) === 'IPG'
+                && $diffMinutes >= 14 && $diffMinutes <= 16
+                && $sigValid === true;
+        });
+    }
+
+    public function test_ipg_exceeds_amount_limit_uat_sends_amount_10000000_when_requested_and_expects_4035402_with_failed_test_run(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host' => Http::response([
+                'responseCode' => '4035402',
+                'responseMessage' => 'Exceeds Transaction Amount Limit',
+            ], 403, ['X-Request-ID' => 'uat-ipg-limit-002']),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->ipgExceedsAmountLimitUatUrl($merchant), ['amount' => 10000000])
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.uat.scenario', 'ipg_create_order_exceeds_amount_limit')
+            ->assertJsonPath('data.uat.passed', true)
+            ->assertJsonPath('data.uat.request.endpoint', '/rest/redirection/v1.0/debit/payment-host-to-host')
+            ->assertJsonPath('data.uat.request.x_timestamp_sent', true)
+            ->assertJsonPath('data.uat.request.amount_value', '10000000.00')
+            ->assertJsonPath('data.uat.request.support_deep_link_checkout_url', 'true')
+            ->assertJsonPath('data.uat.request.product_code', '51051000100000000001')
+            ->assertJsonPath('data.uat.received.http_status', 403)
+            ->assertJsonPath('data.uat.received.response_code', '4035402')
+            ->assertJsonPath('data.uat.received.response_message', 'Exceeds Transaction Amount Limit')
+            ->assertJsonPath('data.uat.received.request_id', 'uat-ipg-limit-002')
+            ->assertDontSee(DanaSandboxKeyMaterialFixture::PrivateKey);
+
+        $this->assertDatabaseCount('payments', 0);
+        $this->assertDatabaseCount('dana_sandbox_test_runs', 1);
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->getKey(),
+            'operation' => 'ipg_create_order_exceeds_amount_tested',
+            'status' => 'failed',
+        ]);
+
+        Http::assertSent(function (Request $request): bool {
+            $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+            $validUpTo = Carbon::parse($payload['validUpTo']);
+            $diffMinutes = (int) round(now('Asia/Jakarta')->diffInSeconds($validUpTo) / 60);
+
+            $signatureService = app(DanaSnapSignatureService::class);
+            $sigValid = $signatureService->verifyTransactional(
+                'POST',
+                '/rest/redirection/v1.0/debit/payment-host-to-host',
+                $request->body(),
+                $request->header('X-TIMESTAMP')[0] ?? '',
+                $request->header('X-SIGNATURE')[0] ?? '',
+                DanaSandboxKeyMaterialFixture::PublicKey,
+            );
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://dana-sandbox.test/rest/redirection/v1.0/debit/payment-host-to-host'
+                && $request->hasHeader('X-TIMESTAMP')
+                && $request->hasHeader('X-SIGNATURE')
+                && $request->hasHeader('X-PARTNER-ID', 'partner-sandbox-001')
+                && ($payload['amount']['value'] ?? null) === '10000000.00'
                 && ($payload['additionalInfo']['supportDeepLinkCheckoutUrl'] ?? null) === 'true'
                 && ($payload['additionalInfo']['productCode'] ?? null) === '51051000100000000001'
                 && ($payload['additionalInfo']['envInfo']['sourcePlatform'] ?? null) === 'IPG'

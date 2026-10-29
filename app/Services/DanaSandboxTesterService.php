@@ -428,7 +428,7 @@ class DanaSandboxTesterService
     }
 
     /** @return array<string, mixed> */
-    public function testIpgCreateOrderExceedsAmountLimit(Merchant $merchant, string $serviceId): array
+    public function testIpgCreateOrderExceedsAmountLimit(Merchant $merchant, string $serviceId, int|string|null $amount = null): array
     {
         $this->assertTesterCanAccessMerchant($merchant, $serviceId);
         $config = $this->sandboxConfiguration($merchant, $serviceId);
@@ -437,15 +437,21 @@ class DanaSandboxTesterService
             throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT IPG Cashier Pay.');
         }
 
+        $targetAmount = match ((int) $amount) {
+            10000000 => 10000000,
+            default => 5000000000,
+        };
+        $formattedAmount = $targetAmount === 10000000 ? '10000000.00' : '5000000000.00';
+
         try {
-            $uat = $this->ipgCashierUatService->exceedsAmountLimit($config);
+            $uat = $this->ipgCashierUatService->exceedsAmountLimit($config, $targetAmount);
         } catch (\LogicException|\RuntimeException $exception) {
             $this->safeRecordRun(
                 $merchant,
                 'ipg_create_order_exceeds_amount_tested',
                 'failed',
                 'UAT IPG Cashier Pay Exceeds Amount Limit belum dapat dieksekusi: '.$exception->getMessage(),
-                ['endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host', 'amount_value' => '5000000000.00', 'passed' => false, 'transaction_status' => 'FAILED']
+                ['endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host', 'amount_value' => $formattedAmount, 'passed' => false, 'transaction_status' => 'FAILED']
             );
 
             throw $exception;
@@ -463,7 +469,7 @@ class DanaSandboxTesterService
                 : 'UAT IPG Cashier Pay Exceeds Amount Limit (4035402) tidak mengembalikan kode yang diharapkan.',
             [
                 'endpoint' => '/rest/redirection/v1.0/debit/payment-host-to-host',
-                'amount_value' => '5000000000.00',
+                'amount_value' => $formattedAmount,
                 'http_status' => $received['http_status'] ?? null,
                 'response_code' => $received['response_code'] ?? null,
                 'response_message' => $received['response_message'] ?? null,

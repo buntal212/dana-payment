@@ -108,9 +108,11 @@ class MerchantManagementController extends Controller
             ->header('Cache-Control', 'no-store');
     }
 
-    public function testIpgCreateOrderExceedsAmountLimit(Merchant $merchant, DanaSandboxTesterService $testerService): JsonResponse
+    public function testIpgCreateOrderExceedsAmountLimit(Merchant $merchant, Request $request, DanaSandboxTesterService $testerService): JsonResponse
     {
-        return response()->json(['data' => $testerService->testIpgCreateOrderExceedsAmountLimit($merchant, $this->serviceId())])
+        $amount = $request->has('amount') ? $request->input('amount') : null;
+
+        return response()->json(['data' => $testerService->testIpgCreateOrderExceedsAmountLimit($merchant, $this->serviceId(), $amount)])
             ->header('Cache-Control', 'no-store');
     }
 
