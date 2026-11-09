@@ -922,6 +922,68 @@ class DanaHostedCheckoutTest extends TestCase
         ]);
         $this->assertDatabaseCount('payment_events', 1);
     }
+
+    public function test_finish_notify_succeeds_with_millisecond_jakarta_timestamp(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-MS']);
+        $payload = $this->finishNotifyPayload($payment, '00');
+
+        $response = $this->postWebhook($payload, headers: [
+            'timestamp' => '2026-10-11T10:01:00.456+07:00',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('responseCode', '2005600')
+            ->assertJsonPath('responseMessage', 'Successful')
+            ->assertHeader('X-TIMESTAMP');
+
+        $this->assertSame('paid', $payment->fresh()->status);
+        $this->assertDatabaseHas('payment_webhooks', [
+            'payment_id' => $payment->id,
+            'processing_status' => 'processed',
+            'signature_valid' => true,
+        ]);
+    }
+
+    public function test_invalid_webhook_returns_snap_4005600_with_timestamp_header(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-INV']);
+        $payload = $this->finishNotifyPayload($payment, '00');
+
+        $response = $this->postWebhook($payload, signature: 'invalid-signature');
+
+        $response->assertStatus(400)
+            ->assertJsonPath('responseCode', '4005600')
+            ->assertJsonPath('responseMessage', 'Bad Request')
+            ->assertHeader('X-TIMESTAMP');
+
+        $this->assertDatabaseHas('payment_webhooks', [
+            'payment_id' => $payment->id,
+            'processing_status' => 'rejected',
+            'error_code' => 'signature_or_identity_invalid',
+        ]);
+    }
+
+    public function test_finish_notify_at_custom_callback_path_verifies_when_signed_using_snap_standard_path(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-CANDIDATE']);
+        $payload = $this->finishNotifyPayload($payment, '00');
+
+        // Request dikirim ke /api/v1/webhooks/dana tapi DANA SNAP menandatangani dengan /v1.0/debit/notify
+        $response = $this->postWebhook($payload, headers: [
+            'request_uri' => self::DANA_CALLBACK_PATH,
+            'signature_path' => '/v1.0/debit/notify',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('responseCode', '2005600')
+            ->assertJsonPath('responseMessage', 'Successful');
+
+        $this->assertSame('paid', $payment->fresh()->status);
+    }
 }
 
 class RecordingDanaSnapSignatureService extends DanaSnapSignatureService
@@ -944,12 +1006,12 @@ class RecordingDanaSnapSignatureService extends DanaSnapSignatureService
         return 'valid-signature';
     }
 
-    public function verifyTransactional(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey): bool
+    public function verifyTransactional(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey, array $candidatePaths = [], ?string $fallbackPublicKey = null): bool
     {
-        return $signature === 'valid-signature' && $publicKey === 'verified-dana-public-key';
+        return $signature === 'valid-signature' && ($publicKey === 'verified-dana-public-key' || $fallbackPublicKey === 'verified-dana-public-key');
     }
 
-    public function transactionalVerificationDiagnostics(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey): array
+    public function transactionalVerificationDiagnostics(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey, array $candidatePaths = [], ?string $fallbackPublicKey = null): array
     {
         $this->lastVerificationInput = [
             'method' => $method,
@@ -958,7 +1020,7 @@ class RecordingDanaSnapSignatureService extends DanaSnapSignatureService
             'timestamp' => $timestamp,
         ];
         $signatureBase64Valid = $signature === 'valid-signature' || base64_decode($signature, true) !== false;
-        $publicKeyValid = $publicKey === 'verified-dana-public-key';
+        $publicKeyValid = $publicKey === 'verified-dana-public-key' || $fallbackPublicKey === 'verified-dana-public-key';
         $signatureValid = $signature === 'valid-signature' && $publicKeyValid;
 
         return [
@@ -972,6 +1034,9 @@ class RecordingDanaSnapSignatureService extends DanaSnapSignatureService
             'string_to_sign_sha256' => str_repeat('b', 64),
             'openssl_verify_result' => $publicKeyValid ? ($signatureValid ? 1 : 0) : null,
             'openssl_verification_completed' => $publicKeyValid,
+            'matched_body_mode' => $signatureValid ? 'raw' : null,
+            'matched_path' => $signatureValid ? $relativePath : null,
+            'matched_key_source' => $signatureValid ? ($publicKey === 'verified-dana-public-key' ? 'configured' : 'official_sandbox_fallback') : null,
         ];
     }
 

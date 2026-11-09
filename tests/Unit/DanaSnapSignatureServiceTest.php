@@ -100,4 +100,96 @@ PEM;
         $this->assertNull($invalidPublicKey['public_key_sha256']);
         $this->assertNull($invalidPublicKey['openssl_verify_result']);
     }
+
+    public function test_verification_succeeds_with_raw_unminified_body_digest(): void
+    {
+        $service = new DanaSnapSignatureService;
+        $privateKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PrivateKey;
+        $publicKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PublicKey;
+
+        $rawBody = "{\n  \"merchantId\" : \"216620010005053684810\",\n  \"originalReferenceNo\" : \"20261109001\"\n}";
+        $timestamp = '2026-11-09T14:01:07.123+07:00';
+        $path = '/api/v1/webhooks/dana';
+
+        // Buktikan bahwa raw body hash berbeda dengan minified hash
+        $this->assertNotSame(hash('sha256', $rawBody), hash('sha256', $service->minifyJson($rawBody)));
+
+        // Buat signature resmi DANA menggunakan raw body SHA256 (Requirement 5)
+        $rawStringToSign = 'POST:'.$path.':'.hash('sha256', $rawBody).':'.$timestamp;
+        $keyResource = openssl_pkey_get_private($privateKey);
+        $this->assertNotFalse($keyResource);
+        openssl_sign($rawStringToSign, $rawSignatureBytes, $keyResource, OPENSSL_ALGO_SHA256);
+        $signature = base64_encode($rawSignatureBytes);
+
+        $diag = $service->transactionalVerificationDiagnostics('POST', $path, $rawBody, $timestamp, $signature, $publicKey);
+        $this->assertTrue($diag['signature_valid']);
+        $this->assertSame(1, $diag['openssl_verify_result']);
+        $this->assertSame('raw', $diag['matched_body_mode']);
+        $this->assertSame($path, $diag['matched_path']);
+        $this->assertSame('configured', $diag['matched_key_source']);
+    }
+
+    public function test_verification_matches_candidate_snap_path(): void
+    {
+        $service = new DanaSnapSignatureService;
+        $privateKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PrivateKey;
+        $publicKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PublicKey;
+
+        $rawBody = '{"originalPartnerReferenceNo":"PAY-001"}';
+        $timestamp = '2026-11-09T14:01:07+07:00';
+        $snapPath = '/v1.0/debit/notify';
+        $receivedPath = '/api/v1/webhooks/dana';
+
+        // DANA menandatangani menggunakan path standar SNAP (/v1.0/debit/notify)
+        $stringToSign = 'POST:'.$snapPath.':'.hash('sha256', $rawBody).':'.$timestamp;
+        $keyResource = openssl_pkey_get_private($privateKey);
+        $this->assertNotFalse($keyResource);
+        openssl_sign($stringToSign, $rawSignatureBytes, $keyResource, OPENSSL_ALGO_SHA256);
+        $signature = base64_encode($rawSignatureBytes);
+
+        $diag = $service->transactionalVerificationDiagnostics(
+            'POST',
+            $receivedPath,
+            $rawBody,
+            $timestamp,
+            $signature,
+            $publicKey,
+            [$receivedPath, '/v1.0/debit/notify'],
+        );
+
+        $this->assertTrue($diag['signature_valid']);
+        $this->assertSame('/v1.0/debit/notify', $diag['matched_path']);
+    }
+
+    public function test_verification_uses_fallback_official_sandbox_key_when_configured_key_differs(): void
+    {
+        $service = new DanaSnapSignatureService;
+
+        // Kunci resmi Sandbox DANA (menggunakan fixture)
+        $danaPrivateKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PrivateKey;
+        $danaPublicKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PublicKey;
+
+        // Kunci yang salah dikonfigurasi pada merchant (menggunakan TEST_PUBLIC_KEY yang berbeda)
+        $wrongPublicKey = self::TEST_PUBLIC_KEY;
+
+        $rawBody = '{"originalPartnerReferenceNo":"PAY-002"}';
+        $timestamp = '2026-11-09T14:01:07+07:00';
+        $path = '/api/v1/webhooks/dana';
+
+        // DANA Sandbox menandatangani webhook dengan DANA private key
+        $stringToSign = 'POST:'.$path.':'.hash('sha256', $rawBody).':'.$timestamp;
+        $danaKeyResource = openssl_pkey_get_private($danaPrivateKey);
+        $this->assertNotFalse($danaKeyResource);
+        openssl_sign($stringToSign, $rawSignatureBytes, $danaKeyResource, OPENSSL_ALGO_SHA256);
+        $signature = base64_encode($rawSignatureBytes);
+
+        // Jika hanya menggunakan kunci merchant yang salah, verifikasi gagal
+        $diagWithoutFallback = $service->transactionalVerificationDiagnostics('POST', $path, $rawBody, $timestamp, $signature, $wrongPublicKey);
+        $this->assertFalse($diagWithoutFallback['signature_valid']);
+
+        // Dengan fallback official Sandbox key, verifikasi berhasil dan mencatat sumber kuncinya
+        $diagWithFallback = $service->transactionalVerificationDiagnostics('POST', $path, $rawBody, $timestamp, $signature, $wrongPublicKey, [], $danaPublicKey);
+        $this->assertTrue($diagWithFallback['signature_valid']);
+        $this->assertSame('official_sandbox_fallback', $diagWithFallback['matched_key_source']);
+    }
 }

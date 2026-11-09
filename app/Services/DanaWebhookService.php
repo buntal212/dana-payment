@@ -90,6 +90,15 @@ class DanaWebhookService
         $timestampValid = is_string($timestamp) && $this->isJakartaTimestamp($timestamp);
         $partnerIdValid = is_string($partnerId) && hash_equals($credentials->partnerId, $partnerId);
         $merchantIdValid = is_string($merchantId) && hash_equals($credentials->merchantId, $merchantId);
+        $candidatePaths = array_values(array_unique(array_filter([
+            $callbackPath,
+            '/v1.0/debit/notify',
+            '/payment-gateway/v1.0/debit/notify',
+        ])));
+        $fallbackPublicKey = $payment->environment === 'sandbox'
+            ? DanaSnapSignatureService::DANA_SANDBOX_PUBLIC_KEY
+            : null;
+
         $signatureDiagnostics = is_string($timestamp)
             && is_string($signature)
             ? $this->signatureService->transactionalVerificationDiagnostics(
@@ -99,6 +108,8 @@ class DanaWebhookService
                 $timestamp,
                 $signature,
                 $credentials->danaPublicKey,
+                $candidatePaths,
+                $fallbackPublicKey,
             )
             : [
                 'signature_valid' => false,
@@ -385,9 +396,27 @@ class DanaWebhookService
 
     private function isJakartaTimestamp(string $timestamp): bool
     {
-        $date = DateTimeImmutable::createFromFormat('Y-m-d\\TH:i:sP', $timestamp);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?\+07:00$/', $timestamp) !== 1) {
+            return false;
+        }
 
-        return $date !== false && $date->format('Y-m-d\\TH:i:sP') === $timestamp && $date->format('P') === '+07:00';
+        $hasSubseconds = str_contains($timestamp, '.');
+        $format = $hasSubseconds ? 'Y-m-d\TH:i:s.uP' : 'Y-m-d\TH:i:sP';
+        $normalized = $hasSubseconds
+            ? preg_replace_callback('/\.(\d+)\+07:00$/', fn ($m) => '.'.str_pad(substr($m[1], 0, 6), 6, '0').'+07:00', $timestamp)
+            : $timestamp;
+
+        $date = DateTimeImmutable::createFromFormat($format, (string) $normalized);
+        if ($date === false) {
+            return false;
+        }
+
+        $errors = DateTimeImmutable::getLastErrors();
+        if ($errors !== false && ($errors['warning_count'] > 0 || $errors['error_count'] > 0)) {
+            return false;
+        }
+
+        return $date->format($format) === $normalized && $date->format('P') === '+07:00';
     }
 
     private function isValidCallbackPath(mixed $path): bool

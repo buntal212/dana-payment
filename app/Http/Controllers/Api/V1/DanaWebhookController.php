@@ -30,7 +30,10 @@ class DanaWebhookController extends Controller
                 'responseMessage' => 'Internal Server Error',
             ], 500)->header('X-TIMESTAMP', now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP'));
         } catch (RuntimeException) {
-            return response()->json(['message' => 'Webhook tidak valid.'], 400);
+            return response()->json([
+                'responseCode' => '4005600',
+                'responseMessage' => 'Bad Request',
+            ], 400)->header('X-TIMESTAMP', now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP'));
         }
 
         return response()->json([
