@@ -66,6 +66,12 @@ class MerchantManagementController extends Controller
             ->header('Cache-Control', 'no-store');
     }
 
+    public function testCreateOrderInvalidSignature(Merchant $merchant, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        return response()->json(['data' => $testerService->testCreateOrderInvalidSignature($merchant, $this->serviceId())])
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function testIpgCreateOrderSuccess(Merchant $merchant, DanaSandboxTesterService $testerService): JsonResponse
     {
         return response()->json(['data' => $testerService->testIpgCreateOrderSuccess($merchant, $this->serviceId())])

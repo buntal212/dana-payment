@@ -41,6 +41,8 @@ Route::prefix('v1/internal')->group(function (): void {
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::post('merchants/{merchant}/sandbox-tester/uat/create-order-inconsistent-request', [MerchantManagementController::class, 'testCreateOrderInconsistentRequest'])
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
+    Route::post('merchants/{merchant}/sandbox-tester/uat/create-order-invalid-signature', [MerchantManagementController::class, 'testCreateOrderInvalidSignature'])
+        ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::post('merchants/{merchant}/sandbox-tester/uat/ipg-create-order-success', [MerchantManagementController::class, 'testIpgCreateOrderSuccess'])
         ->middleware(['throttle:internal-merchant-management', 'internal:merchants:credentials:write', 'internal-https']);
     Route::post('merchants/{merchant}/sandbox-tester/uat/ipg-create-order-missing-timestamp', [MerchantManagementController::class, 'testIpgCreateOrderMissingTimestamp'])
