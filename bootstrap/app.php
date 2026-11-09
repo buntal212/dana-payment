@@ -16,6 +16,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->validateCsrfTokens(except: [
+            'v1.0/debit/notify',
+            'payment-gateway/v1.0/debit/notify',
+        ]);
         $middleware->alias([
             'internal' => AuthenticateInternalService::class,
             'internal-https' => RequireInternalHttps::class,
@@ -24,6 +28,9 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
+            fn (Request $request) => $request->is('api/*')
+                || $request->is('v1.0/*')
+                || $request->is('payment-gateway/*')
+                || $request->expectsJson(),
         );
     })->create();

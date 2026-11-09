@@ -18,6 +18,7 @@ class DanaWebhookController extends Controller
                 'x-timestamp' => $request->header('X-TIMESTAMP'),
                 'x-signature' => $request->header('X-SIGNATURE'),
                 'x-partner-id' => $request->header('X-PARTNER-ID'),
+                'x-external-id' => $request->header('X-EXTERNAL-ID') ?? $request->header('X-REQUEST-ID'),
                 // getPathInfo() berasal dari request URI yang diterima aplikasi,
                 // tidak menyertakan query string, dan tidak mempercayai header
                 // forwarding yang dapat dikirim oleh pemanggil webhook.

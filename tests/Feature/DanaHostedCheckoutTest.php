@@ -798,12 +798,17 @@ class DanaHostedCheckoutTest extends TestCase
         $callbackPath = $headers['signature_path'] ?? self::DANA_CALLBACK_PATH;
         $signature ??= app(DanaSnapSignatureService::class)->signTransactional('POST', $callbackPath, app(DanaSnapSignatureService::class)->minifyJson($body), $timestamp, 'test-private-key');
 
-        return $this->call('POST', $headers['request_uri'] ?? self::DANA_CALLBACK_PATH, [], [], [], [
+        $serverHeaders = [
             'CONTENT_TYPE' => 'application/json',
             'HTTP_X_TIMESTAMP' => $timestamp,
             'HTTP_X_SIGNATURE' => $signature,
             'HTTP_X_PARTNER_ID' => $headers['partner_id'] ?? 'partner-dana-001',
-        ], $body);
+        ];
+        if (isset($headers['external_id'])) {
+            $serverHeaders['HTTP_X_EXTERNAL_ID'] = $headers['external_id'];
+        }
+
+        return $this->call('POST', $headers['request_uri'] ?? self::DANA_CALLBACK_PATH, [], [], [], $serverHeaders, $body);
     }
 
     private function assertWebhookAuthenticationDiagnostics(Payment $payment, bool $timestampValid, bool $partnerIdValid, bool $merchantIdValid, bool $signatureValid, string $receivedTimestamp = '2026-10-11T10:01:00+07:00'): void
@@ -838,6 +843,84 @@ class DanaHostedCheckoutTest extends TestCase
                 && ! array_key_exists('private_key', $context)
                 && ! array_key_exists('public_key', $context);
         })->once();
+    }
+
+    public function test_finish_notify_at_root_v1_0_debit_notify_succeeds_and_verifies_signature(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-NOTIFY-ROOT']);
+        $payload = $this->finishNotifyPayload($payment, '00');
+
+        $response = $this->postWebhook($payload, headers: [
+            'request_uri' => '/v1.0/debit/notify',
+            'signature_path' => '/v1.0/debit/notify',
+            'external_id' => 'EXT-REQ-001',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('responseCode', '2005600')
+            ->assertJsonPath('responseMessage', 'Successful');
+        $this->assertNotNull($response->headers->get('X-TIMESTAMP'));
+
+        $payment->refresh();
+        $this->assertSame('paid', $payment->status);
+        $this->assertNotNull($payment->paid_at);
+        $this->assertSame('/v1.0/debit/notify', $this->signatureService->lastVerificationInput['relative_path'] ?? null);
+
+        $this->assertDatabaseHas('payment_webhooks', [
+            'payment_id' => $payment->id,
+            'processing_status' => 'processed',
+            'provider_event_id' => 'EXT-REQ-001',
+            'signature_valid' => true,
+            'attempts' => 1,
+        ]);
+    }
+
+    public function test_finish_notify_at_root_payment_gateway_v1_0_debit_notify_succeeds(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-NOTIFY-PG']);
+        $payload = $this->finishNotifyPayload($payment, '00');
+
+        $response = $this->postWebhook($payload, headers: [
+            'request_uri' => '/payment-gateway/v1.0/debit/notify',
+            'signature_path' => '/payment-gateway/v1.0/debit/notify',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('responseCode', '2005600')
+            ->assertJsonPath('responseMessage', 'Successful');
+
+        $payment->refresh();
+        $this->assertSame('paid', $payment->status);
+    }
+
+    public function test_duplicate_finish_notify_increments_attempts_and_is_idempotent(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig();
+        $payment = Payment::factory()->for($merchant)->create(['provider_order_id' => 'DANA-ORDER-DUP']);
+        $payload = $this->finishNotifyPayload($payment, '00');
+
+        $this->postWebhook($payload, headers: [
+            'request_uri' => '/v1.0/debit/notify',
+            'signature_path' => '/v1.0/debit/notify',
+            'external_id' => 'EXT-DUP-001',
+        ])->assertOk();
+
+        // Second notification with identical payload
+        $this->postWebhook($payload, headers: [
+            'request_uri' => '/v1.0/debit/notify',
+            'signature_path' => '/v1.0/debit/notify',
+            'external_id' => 'EXT-DUP-001',
+        ])->assertOk()->assertJsonPath('responseCode', '2005600');
+
+        $this->assertDatabaseCount('payment_webhooks', 1);
+        $this->assertDatabaseHas('payment_webhooks', [
+            'payment_id' => $payment->id,
+            'processing_status' => 'processed',
+            'attempts' => 2,
+        ]);
+        $this->assertDatabaseCount('payment_events', 1);
     }
 }
 

@@ -119,3 +119,9 @@ Route::post('v1/payments', [PaymentController::class, 'store'])
 
 Route::post('v1/webhooks/dana', DanaWebhookController::class)
     ->middleware('throttle:60,1');
+
+Route::post('v1.0/debit/notify', DanaWebhookController::class)
+    ->middleware('throttle:60,1');
+
+Route::post('payment-gateway/v1.0/debit/notify', DanaWebhookController::class)
+    ->middleware('throttle:60,1');

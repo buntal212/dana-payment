@@ -48,12 +48,30 @@ class PaymentAuditController extends Controller
 
         return response()->json([
             'data' => $webhooks->getCollection()->map(fn (PaymentWebhook $webhook): array => [
+                'id' => $webhook->id,
                 'received_at' => $webhook->created_at?->toIso8601String(),
                 'processed_at' => $webhook->processed_at?->toIso8601String(),
-                'signature_valid' => $webhook->signature_valid,
+                'signature_valid' => (bool) $webhook->signature_valid,
                 'processing_status' => $webhook->processing_status,
+                'attempts' => (int) $webhook->attempts,
                 'error_code' => $webhook->error_code,
                 'provider_event_id' => $webhook->provider_event_id,
+                'http_status' => match ($webhook->processing_status) {
+                    'processed' => 200,
+                    'rejected' => $webhook->error_code === 'uat_simulated_500' ? 500 : 400,
+                    default => 200,
+                },
+                'response_code' => match ($webhook->processing_status) {
+                    'processed' => '2005600',
+                    'rejected' => $webhook->error_code === 'uat_simulated_500' ? '5005601' : ($webhook->error_code ?? '4005600'),
+                    default => '2005600',
+                },
+                'response_message' => match ($webhook->processing_status) {
+                    'processed' => 'Successful',
+                    'rejected' => $webhook->error_code === 'uat_simulated_500' ? 'Internal Server Error' : 'Bad Request',
+                    default => 'Successful',
+                },
+                'payload_hash' => substr($webhook->payload_sha256, 0, 16).'...',
             ])->values(),
             'meta' => $this->pagination($webhooks),
         ])->header('Cache-Control', 'no-store');

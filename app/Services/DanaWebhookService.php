@@ -26,16 +26,18 @@ class DanaWebhookService
     /** @param array<string, string|null> $headers */
     public function process(string $rawBody, array $headers): void
     {
+        $externalId = $headers['x-external-id'] ?? null;
+
         try {
             $payload = json_decode($rawBody, true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
-            $this->recordRejected(null, $rawBody, 'invalid_json');
+            $this->recordRejected(null, $rawBody, 'invalid_json', $externalId);
 
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
 
         if (! is_array($payload) || ! is_string($payload['originalPartnerReferenceNo'] ?? null)) {
-            $this->recordRejected(null, $rawBody, 'missing_reference');
+            $this->recordRejected(null, $rawBody, 'missing_reference', $externalId);
 
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
@@ -48,7 +50,7 @@ class DanaWebhookService
             })
             ->first();
         if ($payment === null) {
-            $this->recordRejected(null, $rawBody, 'payment_not_found');
+            $this->recordRejected(null, $rawBody, 'payment_not_found', $externalId);
 
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
@@ -60,7 +62,7 @@ class DanaWebhookService
             ->where('enabled', true)
             ->first();
         if ($config === null) {
-            $this->recordRejected($payment, $rawBody, 'config_not_found');
+            $this->recordRejected($payment, $rawBody, 'config_not_found', $externalId);
 
             throw new RuntimeException('Webhook DANA tidak dapat diproses.');
         }
@@ -69,7 +71,7 @@ class DanaWebhookService
             $credentials = $this->credentialResolver->resolve($config);
             $canonicalBody = $this->signatureService->minifyJson($rawBody);
         } catch (\LogicException|\JsonException) {
-            $this->recordRejected($payment, $rawBody, 'config_or_payload_invalid');
+            $this->recordRejected($payment, $rawBody, 'config_or_payload_invalid', $externalId);
 
             throw new RuntimeException('Webhook DANA tidak dapat diproses.');
         }
@@ -80,7 +82,7 @@ class DanaWebhookService
         $callbackPath = $headers['request-path'] ?? config('services.dana.webhook_relative_path');
 
         if (! $this->isValidCallbackPath($callbackPath)) {
-            $this->recordRejected($payment, $rawBody, 'invalid_callback_path');
+            $this->recordRejected($payment, $rawBody, 'invalid_callback_path', $externalId);
 
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
@@ -114,36 +116,36 @@ class DanaWebhookService
 
         if (! $timestampValid || ! $partnerIdValid || ! $merchantIdValid || ! $signatureValid) {
             $this->logAuthenticationDiagnostics($payment, $callbackPath, $timestamp, $timestampValid, $partnerIdValid, $merchantIdValid, $signatureDiagnostics, $rawBody, $canonicalBody);
-            $this->recordRejected($payment, $rawBody, 'signature_or_identity_invalid');
+            $this->recordRejected($payment, $rawBody, 'signature_or_identity_invalid', $externalId);
 
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
 
-        $this->validatePaymentPayload($payment, $payload, $rawBody);
+        $this->validatePaymentPayload($payment, $payload, $rawBody, $externalId);
 
-        if ($this->consumeSimulatedServerError($payment, $rawBody)) {
+        if ($this->consumeSimulatedServerError($payment, $rawBody, $externalId)) {
             throw new DanaWebhookSimulatedServerException('UAT DANA Sandbox Finish Notify 5005601 simulasi aktif.');
         }
 
-        if (! $this->applyPaymentStatus($payment, $payload, $rawBody)) {
+        if (! $this->applyPaymentStatus($payment, $payload, $rawBody, $externalId)) {
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
     }
 
     /** @param array<string, mixed> $payload */
-    private function validatePaymentPayload(Payment $payment, array $payload, string $rawBody): void
+    private function validatePaymentPayload(Payment $payment, array $payload, string $rawBody, ?string $externalId = null): void
     {
         $referenceNo = $payload['originalReferenceNo'] ?? null;
         $amount = $payload['amount'] ?? null;
         if (! is_string($referenceNo) || ! is_array($amount) || ! is_string($amount['value'] ?? null) || ! is_string($amount['currency'] ?? null) || ! $this->amountFormatter->matchesIdr($payment->amount_minor, $amount['value']) || $amount['currency'] !== $payment->currency || ($payment->provider_order_id !== null && $payment->provider_order_id !== $referenceNo)) {
-            $this->recordRejected($payment, $rawBody, 'payment_data_mismatch');
+            $this->recordRejected($payment, $rawBody, 'payment_data_mismatch', $externalId);
 
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
     }
 
     /** @param array<string, mixed> $payload */
-    private function applyPaymentStatus(Payment $payment, array $payload, string $rawBody): bool
+    private function applyPaymentStatus(Payment $payment, array $payload, string $rawBody, ?string $externalId = null): bool
     {
         $providerReference = $payload['originalReferenceNo'];
         $payloadHash = hash('sha256', $rawBody);
@@ -154,12 +156,12 @@ class DanaWebhookService
         };
 
         if ($targetStatus === null) {
-            $this->recordRejected($payment, $rawBody, 'unsupported_status');
+            $this->recordRejected($payment, $rawBody, 'unsupported_status', $externalId);
 
             throw new RuntimeException('Webhook DANA tidak valid.');
         }
 
-        return DB::transaction(function () use ($payment, $providerReference, $payloadHash, $targetStatus): bool {
+        return DB::transaction(function () use ($payment, $providerReference, $payloadHash, $targetStatus, $externalId): bool {
             // Kunci payment sebelum membaca fingerprint payload agar callback
             // paralel tidak dapat sama-sama menerapkan transisi status.
             $lockedPayment = Payment::query()->lockForUpdate()->findOrFail($payment->getKey());
@@ -173,8 +175,13 @@ class DanaWebhookService
                 ->lockForUpdate()
                 ->first();
             if ($webhook !== null) {
+                $webhook->increment('attempts');
+                $webhook->update(['processed_at' => now()]);
+
                 return true;
             }
+
+            $providerEventId = $this->safeProviderEventId($lockedPayment->environment, $externalId);
 
             // Finish Notify mendokumentasikan referensi transaksi, bukan ID event.
             // provider_event_id lama dibiarkan nullable; deduplikasi memakai
@@ -185,7 +192,7 @@ class DanaWebhookService
                 'provider' => 'dana',
                 'environment' => $lockedPayment->environment,
                 'payload_sha256' => $payloadHash,
-                'provider_event_id' => null,
+                'provider_event_id' => $providerEventId,
                 'signature_valid' => true,
                 'processing_status' => 'received',
                 'attempts' => 1,
@@ -223,15 +230,17 @@ class DanaWebhookService
         });
     }
 
-    private function recordRejected(?Payment $payment, string $rawBody, string $errorCode): void
+    private function recordRejected(?Payment $payment, string $rawBody, string $errorCode, ?string $externalId = null): void
     {
+        $providerEventId = $this->safeProviderEventId($payment?->environment ?? 'sandbox', $externalId);
+
         PaymentWebhook::query()->create([
             'merchant_id' => $payment?->merchant_id,
             'payment_id' => $payment?->getKey(),
             'provider' => 'dana',
             'environment' => $payment?->environment ?? 'sandbox',
             'payload_sha256' => hash('sha256', $rawBody),
-            'provider_event_id' => null,
+            'provider_event_id' => $providerEventId,
             'signature_valid' => false,
             'processing_status' => 'rejected',
             'attempts' => 1,
@@ -242,7 +251,7 @@ class DanaWebhookService
         Log::warning('Webhook DANA ditolak.', ['payment_id' => $payment?->getKey(), 'error_code' => $errorCode]);
     }
 
-    private function consumeSimulatedServerError(Payment $payment, string $rawBody): bool
+    private function consumeSimulatedServerError(Payment $payment, string $rawBody, ?string $externalId = null): bool
     {
         if ($payment->environment !== 'sandbox') {
             return false;
@@ -256,7 +265,7 @@ class DanaWebhookService
         $cacheKey = DanaSandboxTesterService::simulateWebhook500CacheKey($payment->merchant_id, $payment->getKey());
         $lockKey = "dana:uat:simulate_notify_500:lock:{$payment->merchant_id}:{$payment->getKey()}";
 
-        $evaluator = function () use ($payment, $rawBody, $cacheKey): bool {
+        $evaluator = function () use ($payment, $rawBody, $cacheKey, $externalId): bool {
             $flag = Cache::get($cacheKey);
             if ($flag === null) {
                 return false;
@@ -289,7 +298,7 @@ class DanaWebhookService
             Cache::forget($cacheKey);
 
             // Rekam webhook rejected UAT 500 di dalam lock sebelum melepaskan lock
-            $this->recordSimulatedServerError($payment, $rawBody);
+            $this->recordSimulatedServerError($payment, $rawBody, $externalId);
 
             return true;
         };
@@ -309,15 +318,17 @@ class DanaWebhookService
         }
     }
 
-    private function recordSimulatedServerError(Payment $payment, string $rawBody): void
+    private function recordSimulatedServerError(Payment $payment, string $rawBody, ?string $externalId = null): void
     {
+        $providerEventId = $this->safeProviderEventId($payment->environment, $externalId);
+
         PaymentWebhook::query()->create([
             'merchant_id' => $payment->merchant_id,
             'payment_id' => $payment->getKey(),
             'provider' => 'dana',
             'environment' => 'sandbox',
             'payload_sha256' => hash('sha256', $rawBody),
-            'provider_event_id' => null,
+            'provider_event_id' => $providerEventId,
             'signature_valid' => true,
             'processing_status' => 'rejected',
             'attempts' => 1,
@@ -329,6 +340,26 @@ class DanaWebhookService
             'payment_id' => $payment->getKey(),
             'merchant_id' => $payment->merchant_id,
         ]);
+    }
+
+    private function safeProviderEventId(string $environment, ?string $externalId): ?string
+    {
+        if (! is_string($externalId) || trim($externalId) === '') {
+            return null;
+        }
+
+        $trimmed = trim($externalId);
+        if (mb_strlen($trimmed) > 160) {
+            $trimmed = mb_substr($trimmed, 0, 160);
+        }
+
+        $exists = PaymentWebhook::query()
+            ->where('provider', 'dana')
+            ->where('environment', $environment)
+            ->where('provider_event_id', $trimmed)
+            ->exists();
+
+        return $exists ? null : $trimmed;
     }
 
     /** @param array{signature_valid: bool, signature_base64_valid: bool, signature_decoded_bytes: int|null, public_key_valid: bool, public_key_bits: int|null, public_key_sha256: string|null, public_key_is_rsa: bool, string_to_sign_sha256: string|null, openssl_verify_result: int|null, openssl_verification_completed: bool} $signatureDiagnostics */
