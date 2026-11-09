@@ -76,6 +76,7 @@ class DanaSandboxQueryPaymentService
         return [
             'http_status' => $response->status(),
             'response_code' => $this->stringOrNull($bodyData['responseCode'] ?? null),
+            'response_message' => $this->stringOrNull($bodyData['responseMessage'] ?? null),
             'latest_transaction_status' => $this->stringOrNull($bodyData['latestTransactionStatus'] ?? null),
             'request_id' => $this->stringOrNull($bodyData['requestID'] ?? null)
                 ?? $this->stringOrNull($response->header('X-Request-ID'))

@@ -27,6 +27,8 @@ class DanaSandboxTesterService
         private DanaSandboxQueryPaymentService $queryPaymentService,
         private DanaSandboxCreateOrderUatService $createOrderUatService,
         private DanaSandboxIpgCashierUatService $ipgCashierUatService,
+        private DanaSandboxCancelPaymentService $cancelPaymentService,
+        private DanaCredentialResolver $credentialResolver,
     ) {}
 
     /** @return array<string, mixed> */
@@ -792,6 +794,128 @@ class DanaSandboxTesterService
     }
 
     /** @return array<string, mixed> */
+    public function testDebitStatusCancelled(Merchant $merchant, string $serviceId, ?string $paymentPublicId = null): array
+    {
+        $this->assertTesterCanAccessMerchant($merchant, $serviceId);
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        $validation = $this->configurationValidation($config);
+        if ($validation['format_valid'] !== true || $config === null) {
+            throw new UnprocessableEntityHttpException('Konfigurasi DANA Sandbox belum siap untuk menjalankan UAT Debit Status.');
+        }
+
+        $payment = null;
+        if (is_string($paymentPublicId) && $paymentPublicId !== '') {
+            $payment = Payment::query()
+                ->forMerchant($merchant)
+                ->where('public_id', $paymentPublicId)
+                ->where('environment', 'sandbox')
+                ->where('provider', 'dana')
+                ->whereJsonContains('metadata->udev_sandbox_tester', true)
+                ->first();
+            if ($payment === null) {
+                $this->paymentNotFound($paymentPublicId);
+            }
+        } else {
+            $payment = Payment::query()
+                ->forMerchant($merchant)
+                ->where('environment', 'sandbox')
+                ->where('provider', 'dana')
+                ->whereJsonContains('metadata->udev_sandbox_tester', true)
+                ->latest('id')
+                ->first();
+        }
+
+        if ($payment === null) {
+            $created = $this->createTransaction($merchant, [
+                'amount' => 10000,
+                'payment_method' => DanaSandboxPaymentMethod::DanaWallet->value,
+                'customer_name' => 'UAT Tester',
+                'order_title' => 'UAT Cancelled Order',
+            ], $serviceId);
+
+            $payment = Payment::query()
+                ->forMerchant($merchant)
+                ->where('public_id', $created['transaction']['id'])
+                ->first();
+        }
+
+        $cancelResult = null;
+        if ($payment !== null) {
+            try {
+                $cancelResult = $this->cancelPaymentService->cancel($payment, $config, 'UAT Status Cancelled (05)');
+            } catch (\Throwable $e) {
+                Log::warning('Debit Status Cancelled: cancel attempt note: '.$e->getMessage());
+            }
+        }
+
+        try {
+            $result = $this->queryPaymentService->query($payment, $config);
+        } catch (\LogicException|\RuntimeException $exception) {
+            $this->recordRun($merchant, 'debit_status_cancelled_tested', 'failed', 'Pemeriksaan UAT Debit Status Cancelled belum dapat dieksekusi.', ['payment_id' => $payment?->public_id]);
+
+            throw $exception;
+        }
+
+        $responseCode = $result['response_code'] ?? null;
+        $responseMessage = $result['response_message'] ?? null;
+        $latestStatus = $result['latest_transaction_status'] ?? null;
+
+        $passed = $responseCode === '2005500'
+            && ($responseMessage === 'Successful' || str_contains((string) $responseMessage, 'Successful'))
+            && $latestStatus === '05';
+
+        $credentials = $this->credentialResolver->resolve($config);
+
+        $this->recordRun(
+            $merchant,
+            'debit_status_cancelled_tested',
+            $passed ? 'succeeded' : 'failed',
+            $passed ? 'UAT Debit Status Cancelled (2005500 / 05) berhasil diverifikasi.' : 'UAT Debit Status Cancelled tidak mengembalikan kode atau status yang diharapkan.',
+            [
+                'payment_id' => $payment->public_id,
+                'original_partner_reference_no' => $payment->partner_reference_no ?? $payment->public_id,
+                'service_code' => '54',
+                'http_status' => $result['http_status'],
+                'response_code' => $responseCode,
+                'response_message' => $responseMessage,
+                'latest_transaction_status' => $latestStatus,
+                'request_id' => $result['request_id'] ?? null,
+                'passed' => $passed,
+            ],
+            $payment,
+        );
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'payment_id' => $payment->public_id,
+            'uat' => [
+                'scenario' => 'debit_status_cancelled',
+                'passed' => $passed,
+                'expected' => [
+                    'response_code' => '2005500',
+                    'response_message' => 'Successful',
+                    'latest_transaction_status' => '05',
+                ],
+                'received' => [
+                    'http_status' => $result['http_status'],
+                    'response_code' => $responseCode,
+                    'response_message' => $responseMessage ?? 'Tidak tersedia',
+                    'latest_transaction_status' => $latestStatus,
+                    'request_id' => $result['request_id'] ?? null,
+                ],
+                'request' => [
+                    'endpoint' => '/payment-gateway/v1.0/debit/status.htm',
+                    'original_partner_reference_no' => $payment->partner_reference_no ?? $payment->public_id,
+                    'service_code' => '54',
+                    'merchant_id' => $credentials->merchantId,
+                ],
+                'cancel_action' => $cancelResult,
+            ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
     public function armWebhookSimulated500(Merchant $merchant, ?string $paymentPublicId, string $serviceId): array
     {
         $this->assertTesterCanAccessMerchant($merchant, $serviceId);
@@ -1049,6 +1173,60 @@ class DanaSandboxTesterService
             'payment_id' => $payment->public_id,
             'local_status' => $payment->status,
             'dana_status' => $dana,
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function cancelDanaSandboxTestTransaction(Merchant $merchant, string $paymentPublicId, string $serviceId, ?string $reason = null): array
+    {
+        $this->assertTesterCanAccessMerchant($merchant, $serviceId);
+        $config = $this->sandboxConfiguration($merchant, $serviceId);
+        if ($config === null) {
+            throw new \LogicException('Konfigurasi DANA Sandbox belum siap.');
+        }
+
+        $payment = Payment::query()
+            ->forMerchant($merchant)
+            ->where('public_id', $paymentPublicId)
+            ->where('environment', 'sandbox')
+            ->where('provider', 'dana')
+            ->whereJsonContains('metadata->udev_sandbox_tester', true)
+            ->first();
+
+        if ($payment === null) {
+            $this->paymentNotFound($paymentPublicId);
+        }
+
+        try {
+            $cancelResult = $this->cancelPaymentService->cancel($payment, $config, $reason);
+        } catch (\LogicException|\RuntimeException $exception) {
+            $this->recordRun($merchant, 'dana_sandbox_payment_cancelled', 'failed', 'Pembatalan transaksi DANA Sandbox belum dapat dieksekusi: '.$exception->getMessage(), [], $payment);
+
+            throw $exception;
+        }
+
+        $succeeded = ($cancelResult['http_status'] ?? 0) === 200
+            && ($cancelResult['response_code'] ?? null) === '2005700';
+
+        $this->recordRun(
+            $merchant,
+            'dana_sandbox_payment_cancelled',
+            $succeeded ? 'succeeded' : 'failed',
+            $succeeded ? 'Transaksi DANA Sandbox berhasil dibatalkan.' : 'DANA Sandbox menolak pembatalan transaksi.',
+            [
+                'http_status' => $cancelResult['http_status'],
+                'response_code' => $cancelResult['response_code'],
+                'response_message' => $cancelResult['response_message'],
+                'request_id' => $cancelResult['request_id'],
+            ],
+            $payment,
+        );
+
+        return [
+            'merchant_code' => $merchant->code,
+            'environment' => 'sandbox',
+            'payment_id' => $payment->public_id,
+            'cancel_result' => $cancelResult,
         ];
     }
 

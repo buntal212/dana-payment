@@ -152,6 +152,14 @@ class MerchantManagementController extends Controller
             ->header('Cache-Control', 'no-store');
     }
 
+    public function testDebitStatusCancelled(Merchant $merchant, Request $request, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        $paymentId = $request->input('payment_id');
+
+        return response()->json(['data' => $testerService->testDebitStatusCancelled($merchant, $this->serviceId(), is_string($paymentId) ? $paymentId : null)])
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function armDanaSandboxWebhookSimulated500(Merchant $merchant, Request $request, DanaSandboxTesterService $testerService): JsonResponse
     {
         $paymentId = $request->input('payment_id');
@@ -175,6 +183,14 @@ class MerchantManagementController extends Controller
     public function queryDanaSandboxPaymentStatus(Merchant $merchant, string $paymentId, DanaSandboxTesterService $testerService): JsonResponse
     {
         return response()->json(['data' => $testerService->queryDanaPaymentStatus($merchant, $paymentId, $this->serviceId())])
+            ->header('Cache-Control', 'no-store');
+    }
+
+    public function cancelDanaSandboxTestTransaction(Merchant $merchant, string $paymentId, Request $request, DanaSandboxTesterService $testerService): JsonResponse
+    {
+        $reason = $request->input('reason');
+
+        return response()->json(['data' => $testerService->cancelDanaSandboxTestTransaction($merchant, $paymentId, $this->serviceId(), is_string($reason) ? $reason : null)])
             ->header('Cache-Control', 'no-store');
     }
 
