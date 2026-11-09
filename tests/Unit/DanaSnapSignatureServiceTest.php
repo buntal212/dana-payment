@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use App\Services\DanaSnapSignatureService;
 use PHPUnit\Framework\TestCase;
+use Tests\Fixtures\DanaSandboxKeyMaterialFixture;
 
 class DanaSnapSignatureServiceTest extends TestCase
 {
@@ -104,8 +105,8 @@ PEM;
     public function test_verification_succeeds_with_raw_unminified_body_digest(): void
     {
         $service = new DanaSnapSignatureService;
-        $privateKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PrivateKey;
-        $publicKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PublicKey;
+        $privateKey = DanaSandboxKeyMaterialFixture::PrivateKey;
+        $publicKey = DanaSandboxKeyMaterialFixture::PublicKey;
 
         $rawBody = "{\n  \"merchantId\" : \"216620010005053684810\",\n  \"originalReferenceNo\" : \"20261109001\"\n}";
         $timestamp = '2026-11-09T14:01:07.123+07:00';
@@ -132,8 +133,8 @@ PEM;
     public function test_verification_matches_candidate_snap_path(): void
     {
         $service = new DanaSnapSignatureService;
-        $privateKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PrivateKey;
-        $publicKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PublicKey;
+        $privateKey = DanaSandboxKeyMaterialFixture::PrivateKey;
+        $publicKey = DanaSandboxKeyMaterialFixture::PublicKey;
 
         $rawBody = '{"originalPartnerReferenceNo":"PAY-001"}';
         $timestamp = '2026-11-09T14:01:07+07:00';
@@ -166,8 +167,8 @@ PEM;
         $service = new DanaSnapSignatureService;
 
         // Kunci resmi Sandbox DANA (menggunakan fixture)
-        $danaPrivateKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PrivateKey;
-        $danaPublicKey = \Tests\Fixtures\DanaSandboxKeyMaterialFixture::PublicKey;
+        $danaPrivateKey = DanaSandboxKeyMaterialFixture::PrivateKey;
+        $danaPublicKey = DanaSandboxKeyMaterialFixture::PublicKey;
 
         // Kunci yang salah dikonfigurasi pada merchant (menggunakan TEST_PUBLIC_KEY yang berbeda)
         $wrongPublicKey = self::TEST_PUBLIC_KEY;

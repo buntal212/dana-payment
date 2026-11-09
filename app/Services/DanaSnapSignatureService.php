@@ -17,7 +17,7 @@ class DanaSnapSignatureService
         ."nfXh/qXuDoB9EzCrgppLDS2ubmk21+dr7WaO/3RFjnwx5ouv6w+iC1XOJKar3CTk\n"
         ."X6JV1OSST1C9sbPGzMHZ8AGB51BM0mok7davD/5irUk+f0C25OgzkwtxAt80dkDo\n"
         ."/QIDAQAB\n"
-        ."-----END PUBLIC KEY-----";
+        .'-----END PUBLIC KEY-----';
 
     public function signTransactional(string $method, string $relativePath, string $jsonBody, string $timestamp, string $privateKey): string
     {
@@ -36,7 +36,7 @@ class DanaSnapSignatureService
     }
 
     /**
-     * @param list<string> $candidatePaths
+     * @param  list<string>  $candidatePaths
      */
     public function verifyTransactional(string $method, string $relativePath, string $jsonBody, string $timestamp, string $signature, string $publicKey, array $candidatePaths = [], ?string $fallbackPublicKey = null): bool
     {
@@ -44,7 +44,7 @@ class DanaSnapSignatureService
     }
 
     /**
-     * @param list<string> $candidatePaths
+     * @param  list<string>  $candidatePaths
      * @return array{
      *     signature_valid: bool,
      *     signature_base64_valid: bool,
