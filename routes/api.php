@@ -27,6 +27,10 @@ Route::prefix('v1/internal')->group(function (): void {
         ->middleware(['throttle:internal-service', 'internal:merchants:read']);
     Route::post('merchants', [MerchantProvisioningController::class, 'store'])
         ->middleware(['throttle:internal-service', 'internal:merchants:write']);
+    Route::patch('merchants/{merchant}/status', [MerchantProvisioningController::class, 'updateStatus'])
+        ->middleware(['throttle:internal-service', 'internal:merchants:write']);
+    Route::delete('merchants/{merchant}', [MerchantProvisioningController::class, 'destroy'])
+        ->middleware(['throttle:internal-service', 'internal:merchants:write']);
     Route::get('merchants/{merchant}/readiness', [MerchantManagementController::class, 'readiness'])
         ->middleware(['throttle:internal-service', 'internal:merchants:readiness', 'internal-https']);
     Route::get('merchants/{merchant}/dana-configuration', [MerchantManagementController::class, 'danaConfiguration'])
