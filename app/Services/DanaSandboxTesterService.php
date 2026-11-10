@@ -1233,6 +1233,7 @@ class DanaSandboxTesterService
         $isNotAllowed = ($cancelResult['response_code'] ?? null) === '4035715';
         $isInsufficientFunds = ($cancelResult['response_code'] ?? null) === '4035714';
         $isMissingTimestamp = ($cancelResult['response_code'] ?? null) === '4005702';
+        $isInvalidSignature = ($cancelResult['response_code'] ?? null) === '4015700';
 
         $this->recordRun(
             $merchant,
@@ -1256,7 +1257,9 @@ class DanaSandboxTesterService
                                         ? 'DANA Sandbox menolak pembatalan transaksi (4035714 Insufficient Funds).'
                                         : ($isMissingTimestamp
                                             ? 'DANA Sandbox menolak pembatalan transaksi (4005702 Missing Mandatory Field).'
-                                            : 'DANA Sandbox menolak pembatalan transaksi.'))))))),
+                                            : ($isInvalidSignature
+                                                ? 'DANA Sandbox menolak pembatalan transaksi (4015700 Unauthorized. Invalid Signature).'
+                                                : 'DANA Sandbox menolak pembatalan transaksi.')))))))),
             [
                 'http_status' => $cancelResult['http_status'],
                 'response_code' => $cancelResult['response_code'],
@@ -1268,6 +1271,8 @@ class DanaSandboxTesterService
                 'original_partner_reference_no' => $cancelResult['original_partner_reference_no'] ?? null,
                 'outbound_original_partner_reference_no' => $cancelResult['outbound_original_partner_reference_no'] ?? null,
                 'x_timestamp_sent' => $cancelResult['x_timestamp_sent'] ?? true,
+                'signature_override' => $cancelResult['signature_override'] ?? null,
+                'x_signature_invalid' => $cancelResult['x_signature_invalid'] ?? false,
             ],
             $payment,
         );

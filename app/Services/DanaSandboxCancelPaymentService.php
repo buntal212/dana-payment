@@ -29,6 +29,7 @@ class DanaSandboxCancelPaymentService
         '4035715', // Not Allowed by Agreement (Transaction Not Permitted)
         '4035714', // Insufficience of Merchant Balance (Insufficient Funds)
         '4005702', // Missing Mandatory Field (Omit X-TIMESTAMP)
+        '4015700', // Unauthorized (Invalid Signature)
     ];
 
     public function __construct(
@@ -81,6 +82,10 @@ class DanaSandboxCancelPaymentService
             return $this->cancelMissingTimestamp($payment, $config, $reason);
         }
 
+        if ($mockCode === '4015700') {
+            return $this->cancelInvalidSignature($payment, $config, $reason);
+        }
+
         return $this->executeCancelRequest(
             payment: $payment,
             config: $config,
@@ -114,6 +119,29 @@ class DanaSandboxCancelPaymentService
     }
 
     /**
+     * Menjalankan UAT DANA Sandbox skenario Invalid Signature (4015700).
+     * Mengirimkan request Cancel Order dengan identifier transaksi asli ($payment->partner_reference_no)
+     * dan seluruh header SNAP valid, namun dengan sengaja MENGGANTI header X-SIGNATURE menjadi literal "invalid_signature".
+     *
+     * @return array<string, mixed>
+     */
+    public function cancelInvalidSignature(Payment $payment, MerchantPaymentConfig $config, ?string $reason = null): array
+    {
+        $genuineReferenceNo = $payment->partner_reference_no ?? $payment->public_id;
+
+        return $this->executeCancelRequest(
+            payment: $payment,
+            config: $config,
+            outboundOriginalPartnerReferenceNo: $genuineReferenceNo,
+            reason: $reason ?? 'UAT Mock Cancel Invalid Signature (4015700)',
+            isMock: true,
+            mockCode: '4015700',
+            omitTimestamp: false,
+            invalidSignature: true,
+        );
+    }
+
+    /**
      * Eksekusi HTTP call Debit Cancel ke DANA Sandbox sesuai spesifikasi Bank Indonesia SNAP.
      *
      * @return array<string, mixed>
@@ -126,6 +154,7 @@ class DanaSandboxCancelPaymentService
         bool $isMock,
         ?string $mockCode,
         bool $omitTimestamp = false,
+        bool $invalidSignature = false,
     ): array {
         if ($payment->environment !== 'sandbox' || $payment->provider !== 'dana') {
             throw new \LogicException('Pembatalan transaksi hanya tersedia untuk pembayaran DANA Sandbox.');
@@ -160,7 +189,9 @@ class DanaSandboxCancelPaymentService
         }
 
         $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-        $signature = $this->signatureService->signTransactional('POST', self::CANCEL_PAYMENT_PATH, $body, $timestamp, $credentials->privateKey);
+        $signature = $invalidSignature
+            ? 'invalid_signature'
+            : $this->signatureService->signTransactional('POST', self::CANCEL_PAYMENT_PATH, $body, $timestamp, $credentials->privateKey);
         $externalId = 'cancel-'.Str::ulid();
 
         $headers = [
@@ -201,6 +232,8 @@ class DanaSandboxCancelPaymentService
             'original_partner_reference_no' => $genuineOriginalPartnerReferenceNo,
             'outbound_original_partner_reference_no' => $outboundOriginalPartnerReferenceNo,
             'x_timestamp_sent' => ! $omitTimestamp,
+            'signature_override' => $invalidSignature ? 'invalid_signature' : null,
+            'x_signature_invalid' => $invalidSignature,
             'request_id' => $this->stringOrNull($bodyData['requestID'] ?? null)
                 ?? $this->stringOrNull($response->header('X-Request-ID'))
                 ?? $this->stringOrNull($response->header('Request-Id')),
