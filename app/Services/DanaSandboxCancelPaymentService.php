@@ -42,7 +42,6 @@ class DanaSandboxCancelPaymentService
 
         if ($partnerReferenceNo !== null && $partnerReferenceNo !== '') {
             $payload['partnerReferenceNo'] = $partnerReferenceNo;
-            $payload['originalPartnerReferenceNo'] = $partnerReferenceNo;
         }
 
         if ($credentials->subMerchantId !== null) {

@@ -1209,6 +1209,7 @@ class DanaSandboxTesterService
             && in_array($cancelResult['response_code'] ?? null, ['2005700', '2025700'], true);
 
         $isPending = ($cancelResult['response_code'] ?? null) === '2025700';
+        $isNotPermitted = ($cancelResult['response_code'] ?? null) === '4035705';
 
         $this->recordRun(
             $merchant,
@@ -1218,7 +1219,9 @@ class DanaSandboxTesterService
                 ? ($isPending
                     ? 'Pembatalan transaksi DANA Sandbox sedang diproses (2025700 Request In Progress).'
                     : 'Transaksi DANA Sandbox berhasil dibatalkan.')
-                : 'DANA Sandbox menolak pembatalan transaksi.',
+                : ($isNotPermitted
+                    ? 'DANA Sandbox menolak pembatalan transaksi (4035705 Do Not Honor).'
+                    : 'DANA Sandbox menolak pembatalan transaksi.'),
             [
                 'http_status' => $cancelResult['http_status'],
                 'response_code' => $cancelResult['response_code'],

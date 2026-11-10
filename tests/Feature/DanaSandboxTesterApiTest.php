@@ -1555,13 +1555,13 @@ class DanaSandboxTesterApiTest extends TestCase
             ->assertJsonPath('data.cancel_result.response_message', 'Request In Progress')
             ->assertJsonPath('data.cancel_result.request_id', 'dana-cancel-prog-001');
 
-        Http::assertSent(function (Request $request): bool {
+        Http::assertSent(function (Request $request) use ($payment): bool {
             $payload = json_decode($request->body(), true);
 
             return $request->method() === 'POST'
                 && $request->url() === 'https://dana-sandbox.test/payment-gateway/v1.0/debit/cancel.htm'
                 && ($payload['partnerReferenceNo'] ?? null) === '2025700'
-                && ($payload['originalPartnerReferenceNo'] ?? null) === '2025700';
+                && ($payload['originalPartnerReferenceNo'] ?? null) === $payment->partner_reference_no;
         });
 
         // Verifies local payment status remains strictly pending
@@ -1578,6 +1578,138 @@ class DanaSandboxTesterApiTest extends TestCase
             'operation' => 'dana_sandbox_payment_cancelled',
             'status' => 'succeeded',
         ]);
+    }
+
+    public function test_uat_cancel_order_transaction_not_permitted_4035705_records_failed_test_run_without_mutating_payment(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        $payment = Payment::factory()->for($merchant)->create([
+            'environment' => 'sandbox',
+            'status' => 'pending',
+            'provider' => 'dana',
+            'partner_reference_no' => 'ORDER-CANCEL-NOT-PERM-001',
+            'metadata' => [
+                'udev_sandbox_tester' => true,
+                'udev_sandbox_payment_method' => 'dana_wallet',
+            ],
+        ]);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/cancel.htm' => Http::response([
+                'responseCode' => '4035705',
+                'responseMessage' => 'Do Not Honor',
+                'requestID' => 'dana-cancel-4035705-001',
+            ], 403),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->cancelDanaSandboxTestTransactionUrl($merchant, $payment), [
+                'reason' => 'UAT Transaction Not Permitted (4035705)',
+                'partner_reference_no' => '4035705',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.merchant_code', $merchant->code)
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.payment_id', $payment->public_id)
+            ->assertJsonPath('data.cancel_result.http_status', 403)
+            ->assertJsonPath('data.cancel_result.response_code', '4035705')
+            ->assertJsonPath('data.cancel_result.response_message', 'Do Not Honor')
+            ->assertJsonPath('data.cancel_result.request_id', 'dana-cancel-4035705-001');
+
+        Http::assertSent(function (Request $request) use ($payment): bool {
+            $payload = json_decode($request->body(), true);
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://dana-sandbox.test/payment-gateway/v1.0/debit/cancel.htm'
+                && ($payload['partnerReferenceNo'] ?? null) === '4035705'
+                && ($payload['originalPartnerReferenceNo'] ?? null) === $payment->partner_reference_no;
+        });
+
+        // Verifies local payment status remains untouched (pending)
+        $this->assertDatabaseHas('payments', [
+            'id' => $payment->id,
+            'status' => 'pending',
+            'paid_at' => null,
+        ]);
+        $this->assertDatabaseMissing('payment_events', ['payment_id' => $payment->id]);
+
+        // Verifies run recorded as failed
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'operation' => 'dana_sandbox_payment_cancelled',
+            'status' => 'failed',
+            'message' => 'DANA Sandbox menolak pembatalan transaksi (4035705 Do Not Honor).',
+        ]);
+    }
+
+    public function test_uat_cancel_order_transaction_not_permitted_4035705_handles_repeated_requests(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        $payment = Payment::factory()->for($merchant)->create([
+            'environment' => 'sandbox',
+            'status' => 'pending',
+            'provider' => 'dana',
+            'partner_reference_no' => 'ORDER-CANCEL-NOT-PERM-REP-001',
+            'metadata' => [
+                'udev_sandbox_tester' => true,
+                'udev_sandbox_payment_method' => 'dana_wallet',
+            ],
+        ]);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/cancel.htm' => Http::sequence()
+                ->push([
+                    'responseCode' => '4035705',
+                    'responseMessage' => 'Do Not Honor',
+                    'requestID' => 'dana-cancel-rep-001',
+                ], 403)
+                ->push([
+                    'responseCode' => '4035705',
+                    'responseMessage' => 'Do Not Honor',
+                    'requestID' => 'dana-cancel-rep-002',
+                ], 403),
+        ]);
+
+        // First attempt
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->cancelDanaSandboxTestTransactionUrl($merchant, $payment), [
+                'reason' => 'First attempt 4035705',
+                'partner_reference_no' => '4035705',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.cancel_result.response_code', '4035705');
+
+        // Repeated attempt
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->cancelDanaSandboxTestTransactionUrl($merchant, $payment), [
+                'reason' => 'Repeated attempt 4035705',
+                'partner_reference_no' => '4035705',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.cancel_result.response_code', '4035705');
+
+        // Payment status untouched
+        $this->assertDatabaseHas('payments', [
+            'id' => $payment->id,
+            'status' => 'pending',
+            'paid_at' => null,
+        ]);
+        $this->assertDatabaseMissing('payment_events', ['payment_id' => $payment->id]);
+
+        // Both recorded as failed runs
+        $runs = DanaSandboxTestRun::query()
+            ->where('merchant_id', $merchant->id)
+            ->where('payment_id', $payment->id)
+            ->where('operation', 'dana_sandbox_payment_cancelled')
+            ->get();
+
+        $this->assertCount(2, $runs);
+        $this->assertTrue($runs->every(fn (DanaSandboxTestRun $run): bool => $run->status === 'failed'));
     }
 
     public function test_cancel_sandbox_transaction_records_failed_test_run_when_dana_rejects(): void
