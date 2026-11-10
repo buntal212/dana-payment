@@ -14,14 +14,87 @@ class DanaSandboxCancelPaymentService
 {
     private const string CANCEL_PAYMENT_PATH = '/payment-gateway/v1.0/debit/cancel.htm';
 
+    /**
+     * Kode mock resmi DANA Sandbox untuk pengujian Cancel Order (SNAP Service Code 57).
+     * DANA Sandbox mengevaluasi kode ini bila dikirimkan pada outbound originalPartnerReferenceNo.
+     *
+     * @var array<int, string>
+     */
+    public const array SANDBOX_MOCK_CODES = [
+        '2025700', // Request In Progress
+        '4035705', // Do Not Honor (Transaction Not Permitted)
+        '4045708', // Invalid Merchant (Merchant Status Abnormal)
+        '4045701', // Transaction Not Found
+    ];
+
     public function __construct(
         private DanaCredentialResolver $credentialResolver,
         private DanaSnapSignatureService $signatureService,
     ) {}
 
-    /** @return array<string, mixed> */
+    /**
+     * Membatalkan transaksi nyata di DANA Sandbox (Happy Path / 2005700).
+     * Mengirimkan identifier transaksi asli ($payment->partner_reference_no) sebagai originalPartnerReferenceNo.
+     *
+     * @return array<string, mixed>
+     */
     public function cancel(Payment $payment, MerchantPaymentConfig $config, ?string $reason = null, ?string $partnerReferenceNo = null): array
     {
+        // Kompatibilitas mundur: jika pemanggil menyuplai kode mock pada argumen ke-4
+        if ($partnerReferenceNo !== null && in_array($partnerReferenceNo, self::SANDBOX_MOCK_CODES, true)) {
+            return $this->simulateMockCancel($payment, $config, $partnerReferenceNo, $reason);
+        }
+
+        $genuineReferenceNo = $payment->partner_reference_no ?? $payment->public_id;
+
+        return $this->executeCancelRequest(
+            payment: $payment,
+            config: $config,
+            outboundOriginalPartnerReferenceNo: $genuineReferenceNo,
+            reason: $reason ?? 'Cancelled by merchant in Sandbox',
+            isMock: false,
+            mockCode: null,
+        );
+    }
+
+    /**
+     * Menjalankan simulasi skenario mock UAT DANA Sandbox (2025700, 4035705, 4045708, 4045701).
+     * Mengirimkan mockCode sebagai outbound originalPartnerReferenceNo ke DANA Sandbox,
+     * tanpa mengubah identifier transaksi asli yang tersimpan di database lokal.
+     *
+     * @return array<string, mixed>
+     */
+    public function simulateMockCancel(Payment $payment, MerchantPaymentConfig $config, string $mockCode, ?string $reason = null): array
+    {
+        if (! in_array($mockCode, self::SANDBOX_MOCK_CODES, true)) {
+            throw new \InvalidArgumentException(
+                "Kode mock DANA Sandbox tidak didukung: {$mockCode}. Kode yang diizinkan: " . implode(', ', self::SANDBOX_MOCK_CODES)
+            );
+        }
+
+        return $this->executeCancelRequest(
+            payment: $payment,
+            config: $config,
+            outboundOriginalPartnerReferenceNo: $mockCode,
+            reason: $reason ?? "UAT Mock Cancel ({$mockCode})",
+            isMock: true,
+            mockCode: $mockCode,
+        );
+    }
+
+    /**
+     * Eksekusi HTTP call Debit Cancel ke DANA Sandbox sesuai spesifikasi Bank Indonesia SNAP.
+     *
+     * @return array<string, mixed>
+     */
+    private function executeCancelRequest(
+        Payment $payment,
+        MerchantPaymentConfig $config,
+        string $outboundOriginalPartnerReferenceNo,
+        string $reason,
+        bool $isMock,
+        ?string $mockCode,
+    ): array {
         if ($payment->environment !== 'sandbox' || $payment->provider !== 'dana') {
             throw new \LogicException('Pembatalan transaksi hanya tersedia untuk pembayaran DANA Sandbox.');
         }
@@ -33,16 +106,13 @@ class DanaSandboxCancelPaymentService
         }
 
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
-        $originalPartnerReferenceNo = $payment->partner_reference_no ?? $payment->public_id;
         $payload = [
-            'originalPartnerReferenceNo' => $originalPartnerReferenceNo,
+            'originalPartnerReferenceNo' => $outboundOriginalPartnerReferenceNo,
             'merchantId' => $credentials->merchantId,
-            'reason' => $reason ?? 'Cancelled by merchant in Sandbox',
+            'reason' => $reason,
         ];
 
-        if ($partnerReferenceNo !== null && $partnerReferenceNo !== '') {
-            $payload['partnerReferenceNo'] = $partnerReferenceNo;
-        }
+        // Sesuai spesifikasi SNAP Debit Cancel (Service Code 57), partnerReferenceNo tidak dikirimkan.
 
         if ($credentials->subMerchantId !== null) {
             $payload['subMerchantId'] = $credentials->subMerchantId;
@@ -52,7 +122,8 @@ class DanaSandboxCancelPaymentService
             $payload['externalStoreId'] = $credentials->externalStoreId;
         }
 
-        if (is_array($payment->metadata) && ! empty($payment->metadata['dana_reference_no'])) {
+        // originalReferenceNo hanya disertakan pada transaksi riil jika sudah tersimpan
+        if (! $isMock && is_array($payment->metadata) && ! empty($payment->metadata['dana_reference_no'])) {
             $payload['originalReferenceNo'] = (string) $payment->metadata['dana_reference_no'];
         }
 
@@ -80,14 +151,18 @@ class DanaSandboxCancelPaymentService
 
         $responseBody = $response->json();
         $bodyData = is_array($responseBody) ? $responseBody : [];
+        $genuineOriginalPartnerReferenceNo = $payment->partner_reference_no ?? $payment->public_id;
 
         return [
             'http_status' => $response->status(),
             'response_code' => $this->stringOrNull($bodyData['responseCode'] ?? null),
             'response_message' => $this->stringOrNull($bodyData['responseMessage'] ?? null),
             'cancel_time' => $this->stringOrNull($bodyData['cancelTime'] ?? null),
-            'partner_reference_no' => $partnerReferenceNo,
-            'original_partner_reference_no' => $payload['originalPartnerReferenceNo'],
+            'is_mock' => $isMock,
+            'mock_code' => $mockCode,
+            'partner_reference_no' => $mockCode,
+            'original_partner_reference_no' => $genuineOriginalPartnerReferenceNo,
+            'outbound_original_partner_reference_no' => $outboundOriginalPartnerReferenceNo,
             'request_id' => $this->stringOrNull($bodyData['requestID'] ?? null)
                 ?? $this->stringOrNull($response->header('X-Request-ID'))
                 ?? $this->stringOrNull($response->header('Request-Id')),

@@ -190,13 +190,15 @@ class MerchantManagementController extends Controller
     {
         $reason = $request->input('reason');
         $partnerReferenceNo = $request->input('partner_reference_no');
+        $mockCode = $request->input('mock_code');
 
         return response()->json(['data' => $testerService->cancelDanaSandboxTestTransaction(
             $merchant,
             $paymentId,
             $this->serviceId(),
             is_string($reason) ? $reason : null,
-            is_string($partnerReferenceNo) ? $partnerReferenceNo : null
+            is_string($partnerReferenceNo) ? $partnerReferenceNo : null,
+            is_string($mockCode) ? $mockCode : null,
         )])->header('Cache-Control', 'no-store');
     }
 

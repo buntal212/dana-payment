@@ -1177,8 +1177,14 @@ class DanaSandboxTesterService
     }
 
     /** @return array<string, mixed> */
-    public function cancelDanaSandboxTestTransaction(Merchant $merchant, string $paymentPublicId, string $serviceId, ?string $reason = null, ?string $partnerReferenceNo = null): array
-    {
+    public function cancelDanaSandboxTestTransaction(
+        Merchant $merchant,
+        string $paymentPublicId,
+        string $serviceId,
+        ?string $reason = null,
+        ?string $partnerReferenceNo = null,
+        ?string $mockCode = null,
+    ): array {
         $this->assertTesterCanAccessMerchant($merchant, $serviceId);
         $config = $this->sandboxConfiguration($merchant, $serviceId);
         if ($config === null) {
@@ -1197,8 +1203,19 @@ class DanaSandboxTesterService
             $this->paymentNotFound($paymentPublicId);
         }
 
+        $effectiveMockCode = null;
+        if ($mockCode !== null && in_array($mockCode, DanaSandboxCancelPaymentService::SANDBOX_MOCK_CODES, true)) {
+            $effectiveMockCode = $mockCode;
+        } elseif ($partnerReferenceNo !== null && in_array($partnerReferenceNo, DanaSandboxCancelPaymentService::SANDBOX_MOCK_CODES, true)) {
+            $effectiveMockCode = $partnerReferenceNo;
+        }
+
         try {
-            $cancelResult = $this->cancelPaymentService->cancel($payment, $config, $reason, $partnerReferenceNo);
+            if ($effectiveMockCode !== null) {
+                $cancelResult = $this->cancelPaymentService->simulateMockCancel($payment, $config, $effectiveMockCode, $reason);
+            } else {
+                $cancelResult = $this->cancelPaymentService->cancel($payment, $config, $reason);
+            }
         } catch (\LogicException|\RuntimeException $exception) {
             $this->recordRun($merchant, 'dana_sandbox_payment_cancelled', 'failed', 'Pembatalan transaksi DANA Sandbox belum dapat dieksekusi: '.$exception->getMessage(), [], $payment);
 
@@ -1210,6 +1227,8 @@ class DanaSandboxTesterService
 
         $isPending = ($cancelResult['response_code'] ?? null) === '2025700';
         $isNotPermitted = ($cancelResult['response_code'] ?? null) === '4035705';
+        $isInvalidMerchant = ($cancelResult['response_code'] ?? null) === '4045708';
+        $isNotFound = ($cancelResult['response_code'] ?? null) === '4045701';
 
         $this->recordRun(
             $merchant,
@@ -1221,13 +1240,21 @@ class DanaSandboxTesterService
                     : 'Transaksi DANA Sandbox berhasil dibatalkan.')
                 : ($isNotPermitted
                     ? 'DANA Sandbox menolak pembatalan transaksi (4035705 Do Not Honor).'
-                    : 'DANA Sandbox menolak pembatalan transaksi.'),
+                    : ($isInvalidMerchant
+                        ? 'DANA Sandbox menolak pembatalan transaksi (4045708 Invalid Merchant).'
+                        : ($isNotFound
+                            ? 'DANA Sandbox menolak pembatalan transaksi (4045701 Transaction Not Found).'
+                            : 'DANA Sandbox menolak pembatalan transaksi.'))),
             [
                 'http_status' => $cancelResult['http_status'],
                 'response_code' => $cancelResult['response_code'],
                 'response_message' => $cancelResult['response_message'],
                 'request_id' => $cancelResult['request_id'],
-                'partner_reference_no' => $partnerReferenceNo,
+                'is_mock' => $effectiveMockCode !== null,
+                'mock_code' => $effectiveMockCode,
+                'partner_reference_no' => $effectiveMockCode ?? $partnerReferenceNo,
+                'original_partner_reference_no' => $cancelResult['original_partner_reference_no'] ?? null,
+                'outbound_original_partner_reference_no' => $cancelResult['outbound_original_partner_reference_no'] ?? null,
             ],
             $payment,
         );
@@ -1338,6 +1365,8 @@ class DanaSandboxTesterService
         return [
             'id' => $payment->public_id,
             'merchant_order_id' => $payment->merchant_order_id,
+            'partner_reference_no' => $payment->partner_reference_no ?? $payment->public_id,
+            'reference_no' => $payment->provider_order_id,
             'amount_minor' => $payment->amount_minor,
             'currency' => $payment->currency,
             'status' => $payment->status,
