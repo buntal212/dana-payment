@@ -30,6 +30,8 @@ class DanaSandboxCancelPaymentService
         '4035714', // Insufficience of Merchant Balance (Insufficient Funds)
         '4005702', // Missing Mandatory Field (Omit X-TIMESTAMP)
         '4015700', // Unauthorized (Invalid Signature)
+        '5005701', // Internal Server Error (Timeout)
+        '12345678', // Transaction Not Found (Portal Trigger)
     ];
 
     public function __construct(
@@ -86,10 +88,12 @@ class DanaSandboxCancelPaymentService
             return $this->cancelInvalidSignature($payment, $config, $reason);
         }
 
+        $outboundReference = in_array($mockCode, ['4045701', '12345678'], true) ? '12345678' : $mockCode;
+
         return $this->executeCancelRequest(
             payment: $payment,
             config: $config,
-            outboundOriginalPartnerReferenceNo: $mockCode,
+            outboundOriginalPartnerReferenceNo: $outboundReference,
             reason: $reason ?? "UAT Mock Cancel ({$mockCode})",
             isMock: true,
             mockCode: $mockCode,

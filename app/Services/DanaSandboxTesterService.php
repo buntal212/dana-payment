@@ -1234,6 +1234,7 @@ class DanaSandboxTesterService
         $isInsufficientFunds = ($cancelResult['response_code'] ?? null) === '4035714';
         $isMissingTimestamp = ($cancelResult['response_code'] ?? null) === '4005702';
         $isInvalidSignature = ($cancelResult['response_code'] ?? null) === '4015700';
+        $isTimeout = ($cancelResult['response_code'] ?? null) === '5005701';
 
         $this->recordRun(
             $merchant,
@@ -1259,7 +1260,9 @@ class DanaSandboxTesterService
                                             ? 'DANA Sandbox menolak pembatalan transaksi (4005702 Missing Mandatory Field).'
                                             : ($isInvalidSignature
                                                 ? 'DANA Sandbox menolak pembatalan transaksi (4015700 Unauthorized. Invalid Signature).'
-                                                : 'DANA Sandbox menolak pembatalan transaksi.')))))))),
+                                                : ($isTimeout
+                                                    ? 'DANA Sandbox menolak pembatalan transaksi (5005701 Internal Server Error).'
+                                                    : 'DANA Sandbox menolak pembatalan transaksi.'))))))))),
             [
                 'http_status' => $cancelResult['http_status'],
                 'response_code' => $cancelResult['response_code'],
