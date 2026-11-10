@@ -189,9 +189,15 @@ class MerchantManagementController extends Controller
     public function cancelDanaSandboxTestTransaction(Merchant $merchant, string $paymentId, Request $request, DanaSandboxTesterService $testerService): JsonResponse
     {
         $reason = $request->input('reason');
+        $partnerReferenceNo = $request->input('partner_reference_no');
 
-        return response()->json(['data' => $testerService->cancelDanaSandboxTestTransaction($merchant, $paymentId, $this->serviceId(), is_string($reason) ? $reason : null)])
-            ->header('Cache-Control', 'no-store');
+        return response()->json(['data' => $testerService->cancelDanaSandboxTestTransaction(
+            $merchant,
+            $paymentId,
+            $this->serviceId(),
+            is_string($reason) ? $reason : null,
+            is_string($partnerReferenceNo) ? $partnerReferenceNo : null
+        )])->header('Cache-Control', 'no-store');
     }
 
     public function danaSandboxTestHistory(Merchant $merchant, Request $request, DanaSandboxTesterService $testerService): JsonResponse

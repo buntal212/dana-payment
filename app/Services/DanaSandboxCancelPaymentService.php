@@ -20,7 +20,7 @@ class DanaSandboxCancelPaymentService
     ) {}
 
     /** @return array<string, mixed> */
-    public function cancel(Payment $payment, MerchantPaymentConfig $config, ?string $reason = null): array
+    public function cancel(Payment $payment, MerchantPaymentConfig $config, ?string $reason = null, ?string $partnerReferenceNo = null): array
     {
         if ($payment->environment !== 'sandbox' || $payment->provider !== 'dana') {
             throw new \LogicException('Pembatalan transaksi hanya tersedia untuk pembayaran DANA Sandbox.');
@@ -33,11 +33,17 @@ class DanaSandboxCancelPaymentService
         }
 
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
+        $originalPartnerReferenceNo = $payment->partner_reference_no ?? $payment->public_id;
         $payload = [
-            'originalPartnerReferenceNo' => $payment->partner_reference_no ?? $payment->public_id,
+            'originalPartnerReferenceNo' => $originalPartnerReferenceNo,
             'merchantId' => $credentials->merchantId,
             'reason' => $reason ?? 'Cancelled by merchant in Sandbox',
         ];
+
+        if ($partnerReferenceNo !== null && $partnerReferenceNo !== '') {
+            $payload['partnerReferenceNo'] = $partnerReferenceNo;
+            $payload['originalPartnerReferenceNo'] = $partnerReferenceNo;
+        }
 
         if ($credentials->subMerchantId !== null) {
             $payload['subMerchantId'] = $credentials->subMerchantId;
@@ -81,6 +87,7 @@ class DanaSandboxCancelPaymentService
             'response_code' => $this->stringOrNull($bodyData['responseCode'] ?? null),
             'response_message' => $this->stringOrNull($bodyData['responseMessage'] ?? null),
             'cancel_time' => $this->stringOrNull($bodyData['cancelTime'] ?? null),
+            'partner_reference_no' => $partnerReferenceNo,
             'original_partner_reference_no' => $payload['originalPartnerReferenceNo'],
             'request_id' => $this->stringOrNull($bodyData['requestID'] ?? null)
                 ?? $this->stringOrNull($response->header('X-Request-ID'))

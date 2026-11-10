@@ -1177,7 +1177,7 @@ class DanaSandboxTesterService
     }
 
     /** @return array<string, mixed> */
-    public function cancelDanaSandboxTestTransaction(Merchant $merchant, string $paymentPublicId, string $serviceId, ?string $reason = null): array
+    public function cancelDanaSandboxTestTransaction(Merchant $merchant, string $paymentPublicId, string $serviceId, ?string $reason = null, ?string $partnerReferenceNo = null): array
     {
         $this->assertTesterCanAccessMerchant($merchant, $serviceId);
         $config = $this->sandboxConfiguration($merchant, $serviceId);
@@ -1198,7 +1198,7 @@ class DanaSandboxTesterService
         }
 
         try {
-            $cancelResult = $this->cancelPaymentService->cancel($payment, $config, $reason);
+            $cancelResult = $this->cancelPaymentService->cancel($payment, $config, $reason, $partnerReferenceNo);
         } catch (\LogicException|\RuntimeException $exception) {
             $this->recordRun($merchant, 'dana_sandbox_payment_cancelled', 'failed', 'Pembatalan transaksi DANA Sandbox belum dapat dieksekusi: '.$exception->getMessage(), [], $payment);
 
@@ -1206,18 +1206,25 @@ class DanaSandboxTesterService
         }
 
         $succeeded = ($cancelResult['http_status'] ?? 0) === 200
-            && ($cancelResult['response_code'] ?? null) === '2005700';
+            && in_array($cancelResult['response_code'] ?? null, ['2005700', '2025700'], true);
+
+        $isPending = ($cancelResult['response_code'] ?? null) === '2025700';
 
         $this->recordRun(
             $merchant,
             'dana_sandbox_payment_cancelled',
             $succeeded ? 'succeeded' : 'failed',
-            $succeeded ? 'Transaksi DANA Sandbox berhasil dibatalkan.' : 'DANA Sandbox menolak pembatalan transaksi.',
+            $succeeded
+                ? ($isPending
+                    ? 'Pembatalan transaksi DANA Sandbox sedang diproses (2025700 Request In Progress).'
+                    : 'Transaksi DANA Sandbox berhasil dibatalkan.')
+                : 'DANA Sandbox menolak pembatalan transaksi.',
             [
                 'http_status' => $cancelResult['http_status'],
                 'response_code' => $cancelResult['response_code'],
                 'response_message' => $cancelResult['response_message'],
                 'request_id' => $cancelResult['request_id'],
+                'partner_reference_no' => $partnerReferenceNo,
             ],
             $payment,
         );
