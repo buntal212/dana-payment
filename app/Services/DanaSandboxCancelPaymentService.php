@@ -26,6 +26,7 @@ class DanaSandboxCancelPaymentService
         '4045708', // Invalid Merchant (Merchant Status Abnormal)
         '4045701', // Transaction Not Found
         '4035700', // Exceed Cancel Window Time (Transaction Expired)
+        '4035715', // Not Allowed by Agreement (Transaction Not Permitted)
         '4005702', // Missing Mandatory Field (Omit X-TIMESTAMP)
     ];
 

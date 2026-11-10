@@ -1230,6 +1230,7 @@ class DanaSandboxTesterService
         $isInvalidMerchant = ($cancelResult['response_code'] ?? null) === '4045708';
         $isNotFound = ($cancelResult['response_code'] ?? null) === '4045701';
         $isExpired = ($cancelResult['response_code'] ?? null) === '4035700';
+        $isNotAllowed = ($cancelResult['response_code'] ?? null) === '4035715';
         $isMissingTimestamp = ($cancelResult['response_code'] ?? null) === '4005702';
 
         $this->recordRun(
@@ -1248,9 +1249,11 @@ class DanaSandboxTesterService
                             ? 'DANA Sandbox menolak pembatalan transaksi (4045701 Transaction Not Found).'
                             : ($isExpired
                                 ? 'DANA Sandbox menolak pembatalan transaksi (4035700 Transaction Expired).'
-                                : ($isMissingTimestamp
-                                    ? 'DANA Sandbox menolak pembatalan transaksi (4005702 Missing Mandatory Field).'
-                                    : 'DANA Sandbox menolak pembatalan transaksi.'))))),
+                                : ($isNotAllowed
+                                    ? 'DANA Sandbox menolak pembatalan transaksi (4035715 Transaction Not Permitted).'
+                                    : ($isMissingTimestamp
+                                        ? 'DANA Sandbox menolak pembatalan transaksi (4005702 Missing Mandatory Field).'
+                                        : 'DANA Sandbox menolak pembatalan transaksi.')))))),
             [
                 'http_status' => $cancelResult['http_status'],
                 'response_code' => $cancelResult['response_code'],
