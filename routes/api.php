@@ -112,9 +112,13 @@ Route::prefix('v1')->middleware(['merchant:payments:read', 'throttle:merchant-ap
     Route::get('payments', [PaymentController::class, 'index']);
     Route::get('payments/{id}', [PaymentController::class, 'show']);
     Route::get('payments/{id}/status', [PaymentController::class, 'status']);
+    Route::get('payments/{id}/inquiry', [PaymentController::class, 'inquiry']);
 });
 
 Route::post('v1/payments', [PaymentController::class, 'store'])
+    ->middleware(['merchant:payments:create', 'throttle:merchant-api']);
+
+Route::post('v1/payments/{id}/cancel', [PaymentController::class, 'cancel'])
     ->middleware(['merchant:payments:create', 'throttle:merchant-api']);
 
 Route::post('v1/webhooks/dana', DanaWebhookController::class)

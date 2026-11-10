@@ -25,13 +25,28 @@ class MerchantPaymentApiTest extends TestCase
                 return 'test-signature';
             }
         });
-        Http::fake([
-            'https://api.sandbox.dana.id/*' => Http::response([
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            if (str_contains($request->url(), 'cancel.htm')) {
+                return Http::response([
+                    'responseCode' => '2005700',
+                    'responseMessage' => 'Successful',
+                    'cancelTime' => now()->toISOString(),
+                ]);
+            }
+            if (str_contains($request->url(), 'status.htm')) {
+                return Http::response([
+                    'responseCode' => '2005500',
+                    'responseMessage' => 'Successful',
+                    'latestTransactionStatus' => '00',
+                ]);
+            }
+
+            return Http::response([
                 'responseCode' => '2005400',
                 'referenceNo' => 'DANA-TEST-ORDER',
                 'webRedirectUrl' => 'https://checkout.sandbox.dana.id/test',
-            ]),
-        ]);
+            ]);
+        });
     }
 
     public function test_merchant_with_a_valid_api_key_can_create_a_pending_payment(): void
@@ -112,6 +127,65 @@ class MerchantPaymentApiTest extends TestCase
 
         $this->withToken($apiKey)->getJson('/api/v1/payments')->assertOk()->assertJsonMissingPath('key_hash');
         $this->withToken($apiKey)->getJson('/api/v1/admin/merchants')->assertUnauthorized();
+    }
+
+    public function test_merchant_can_cancel_pending_payment(): void
+    {
+        [$merchant, $apiKey] = $this->merchantWithApiKey();
+        $payment = Payment::factory()->for($merchant)->create([
+            'status' => 'pending',
+            'amount_minor' => 10_000,
+            'merchant_order_id' => 'order-cancel-01',
+            'partner_reference_no' => 'Q123456789012345678901234',
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.dana.id/payment-gateway/v1.0/debit/cancel.htm*' => Http::response([
+                'responseCode' => '2005700',
+                'responseMessage' => 'Successful',
+                'cancelTime' => now()->toISOString(),
+            ]),
+        ]);
+
+        $response = $this->withToken($apiKey)->postJson("/api/v1/payments/{$payment->public_id}/cancel", [
+            'reason' => 'User requested cancel',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('data.status', 'cancelled')
+            ->assertJsonPath('cancel_result.response_code', '2005700');
+
+        $this->assertSame('cancelled', $payment->fresh()->status);
+        $this->assertDatabaseHas('payment_events', [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'event_type' => 'payment.cancelled',
+        ]);
+    }
+
+    public function test_merchant_can_inquiry_payment_status(): void
+    {
+        [$merchant, $apiKey] = $this->merchantWithApiKey();
+        $payment = Payment::factory()->for($merchant)->create([
+            'status' => 'pending',
+            'amount_minor' => 10_000,
+            'merchant_order_id' => 'order-inquiry-01',
+            'partner_reference_no' => 'Q123456789012345678901234',
+        ]);
+
+        Http::fake([
+            'https://api.sandbox.dana.id/payment-gateway/v1.0/debit/status.htm*' => Http::response([
+                'responseCode' => '2005500',
+                'responseMessage' => 'Successful',
+                'latestTransactionStatus' => '00',
+            ]),
+        ]);
+
+        $response = $this->withToken($apiKey)->getJson("/api/v1/payments/{$payment->public_id}/inquiry");
+
+        $response->assertOk()
+            ->assertJsonPath('dana_status.response_code', '2005500')
+            ->assertJsonPath('dana_status.latest_transaction_status', '00');
     }
 
     /**
