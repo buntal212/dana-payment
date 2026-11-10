@@ -23,14 +23,18 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 class MerchantManagementController extends Controller
 {
-    public function readiness(Merchant $merchant, InternalMerchantManagementService $merchantManagementService): InternalMerchantReadinessResource
+    public function readiness(Merchant $merchant, Request $request, InternalMerchantManagementService $merchantManagementService): InternalMerchantReadinessResource
     {
-        return new InternalMerchantReadinessResource($merchantManagementService->readiness($merchant, $this->serviceId()));
+        $environment = (string) $request->query('environment', 'sandbox');
+
+        return new InternalMerchantReadinessResource($merchantManagementService->readiness($merchant, $this->serviceId(), $environment));
     }
 
-    public function danaConfiguration(Merchant $merchant, InternalMerchantManagementService $merchantManagementService): JsonResponse
+    public function danaConfiguration(Merchant $merchant, Request $request, InternalMerchantManagementService $merchantManagementService): JsonResponse
     {
-        return response()->json(['data' => $merchantManagementService->danaConfiguration($merchant, $this->serviceId())])
+        $environment = (string) $request->query('environment', 'sandbox');
+
+        return response()->json(['data' => $merchantManagementService->danaConfiguration($merchant, $this->serviceId(), $environment)])
             ->header('Cache-Control', 'no-store');
     }
 

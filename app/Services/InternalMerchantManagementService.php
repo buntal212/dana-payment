@@ -24,13 +24,13 @@ class InternalMerchantManagementService
     /**
      * @return array<string, mixed>
      */
-    public function readiness(Merchant $merchant, string $serviceId): array
+    public function readiness(Merchant $merchant, string $serviceId, string $environment = 'sandbox'): array
     {
         $this->assertServiceOwnsMerchant($merchant, $serviceId);
 
         $config = $merchant->paymentConfigs()
             ->where('provider', 'dana')
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->first();
         $configuration = $this->configurationStatus($config);
         $activeApiKeyCount = $merchant->apiKeys()->usable()->count();
@@ -51,7 +51,7 @@ class InternalMerchantManagementService
         return [
             'merchant_code' => $merchant->code,
             'merchant_status' => $merchant->status,
-            'environment' => 'sandbox',
+            'environment' => $environment,
             'active_api_key_count' => $activeApiKeyCount,
             'dana_configuration' => $this->publicConfigurationStatus($configuration),
             'readiness_status' => $notReadyComponents === [] ? 'ready' : 'not_ready',
@@ -60,26 +60,26 @@ class InternalMerchantManagementService
     }
 
     /**
-     * Mengembalikan metadata konfigurasi Sandbox yang aman untuk mengisi ulang
+     * Mengembalikan metadata konfigurasi yang aman untuk mengisi ulang
      * formulir. Nilai secret tidak pernah keluar dari Gateway.
      *
      * @return array<string, mixed>
      */
-    public function danaConfiguration(Merchant $merchant, string $serviceId): array
+    public function danaConfiguration(Merchant $merchant, string $serviceId, string $environment = 'sandbox'): array
     {
         $this->assertServiceOwnsMerchant($merchant, $serviceId);
         $this->assertMerchantConfigurationCanBeRead($merchant);
 
         $config = $merchant->paymentConfigs()
             ->where('provider', 'dana')
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->first();
         $status = $this->configurationStatus($config);
 
         if ($config === null) {
             return [
                 'merchant_code' => $merchant->code,
-                'environment' => 'sandbox',
+                'environment' => $environment,
                 'configuration_exists' => false,
                 'dana_configuration' => $this->publicConfigurationStatus($status),
                 'configuration' => null,
@@ -90,7 +90,7 @@ class InternalMerchantManagementService
 
         return [
             'merchant_code' => $merchant->code,
-            'environment' => 'sandbox',
+            'environment' => $environment,
             'configuration_exists' => true,
             'dana_configuration' => $this->publicConfigurationStatus($status),
             'configuration' => [
@@ -129,10 +129,11 @@ class InternalMerchantManagementService
             }
 
             $this->assertMerchantCanBeChanged($lockedMerchant);
+            $env = $attributes['environment'] ?? 'sandbox';
             $config = MerchantPaymentConfig::query()
                 ->where('merchant_id', $lockedMerchant->getKey())
                 ->where('provider', 'dana')
-                ->where('environment', 'sandbox')
+                ->where('environment', $env)
                 ->lockForUpdate()
                 ->first();
 
@@ -140,7 +141,7 @@ class InternalMerchantManagementService
                 $config = new MerchantPaymentConfig([
                     'merchant_id' => $lockedMerchant->getKey(),
                     'provider' => 'dana',
-                    'environment' => 'sandbox',
+                    'environment' => $env,
                 ]);
             }
 
@@ -170,7 +171,7 @@ class InternalMerchantManagementService
 
             $safeResult = [
                 'merchant_code' => $lockedMerchant->code,
-                'environment' => 'sandbox',
+                'environment' => $env,
                 'dana_configuration' => $this->publicConfigurationStatus($this->configurationStatus($config)),
             ];
             $this->recordRequestAndAudit(
@@ -181,7 +182,7 @@ class InternalMerchantManagementService
                 fingerprint: $fingerprint,
                 safeResult: $safeResult,
                 safeDetails: [
-                    'environment' => 'sandbox',
+                    'environment' => $env,
                     'enabled' => $config->enabled,
                     'configuration_ready' => $safeResult['dana_configuration']['ready'],
                 ],

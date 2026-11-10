@@ -68,10 +68,12 @@ class MerchantProvisioningController extends Controller
 
     public function updateStatus(Merchant $merchant, UpdateInternalMerchantStatusRequest $request): JsonResponse
     {
-        if ($merchant->code === 'udev-central') {
+        $primaryMerchantCode = (string) ($request->header('X-Primary-Merchant-Code') ?: config('services.udev_internal.primary_merchant_code', 'udev-central'));
+
+        if ($merchant->code === $primaryMerchantCode) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Merchant udev-central adalah merchant sistem pusat dan tidak dapat diubah statusnya.',
+                'message' => "Merchant {$merchant->code} adalah merchant sistem pusat dan tidak dapat diubah statusnya.",
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
@@ -132,10 +134,12 @@ class MerchantProvisioningController extends Controller
 
     public function destroy(Merchant $merchant, Request $request): JsonResponse
     {
-        if ($merchant->code === 'udev-central') {
+        $primaryMerchantCode = (string) ($request->header('X-Primary-Merchant-Code') ?: config('services.udev_internal.primary_merchant_code', 'udev-central'));
+
+        if ($merchant->code === $primaryMerchantCode) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Merchant udev-central adalah merchant sistem pusat dan tidak dapat dihapus.',
+                'message' => "Merchant {$merchant->code} adalah merchant sistem pusat dan tidak dapat dihapus.",
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 

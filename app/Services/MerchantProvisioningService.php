@@ -26,10 +26,11 @@ class MerchantProvisioningService
     }
 
     /**
-     * @param  array{code: string, name: string, email: string|null, environment: string, idempotency_key: string}  $attributes
+     * @param  array{code: string, name: string, email: string|null, environment?: string|null, idempotency_key: string}  $attributes
      */
     public function provisionForInternalService(array $attributes, string $serviceId): InternalMerchantProvisioningRequest
     {
+        $attributes['environment'] = $attributes['environment'] ?? 'sandbox';
         $fingerprint = $this->fingerprint($attributes);
 
         try {
@@ -78,15 +79,15 @@ class MerchantProvisioningService
     }
 
     /**
-     * @param  array{code: string, name: string, email: string|null, key_name: string, environment: string, idempotency_key: string}  $attributes
+     * @param  array{code: string, name: string, email: string|null, environment?: string|null, idempotency_key: string}  $attributes
      */
     private function fingerprint(array $attributes): string
     {
         return hash('sha256', json_encode([
             'code' => $attributes['code'],
             'name' => $attributes['name'],
-            'email' => $attributes['email'],
-            'environment' => $attributes['environment'],
+            'email' => $attributes['email'] ?? null,
+            'environment' => $attributes['environment'] ?? 'sandbox',
         ], JSON_THROW_ON_ERROR));
     }
 
@@ -99,7 +100,7 @@ class MerchantProvisioningService
         return $request->load('merchant');
     }
 
-    /** @param array{code: string, name: string, email: string|null, environment: string, idempotency_key: string} $attributes */
+    /** @param array{code: string, name: string, email: string|null, environment?: string|null, idempotency_key: string} $attributes */
     private function matchingProvisionedMerchant(array $attributes, string $serviceId, string $fingerprint): ?InternalMerchantProvisioningRequest
     {
         $merchant = Merchant::query()->where('code', $attributes['code'])->lockForUpdate()->first();
@@ -107,10 +108,11 @@ class MerchantProvisioningService
             return null;
         }
 
+        $env = $attributes['environment'] ?? 'sandbox';
         $request = InternalMerchantProvisioningRequest::query()
             ->where('merchant_id', $merchant->getKey())
             ->where('service_id', $serviceId)
-            ->where('environment', $attributes['environment'])
+            ->where('environment', $env)
             ->lockForUpdate()
             ->latest('id')
             ->first();
@@ -120,18 +122,30 @@ class MerchantProvisioningService
                 'merchant_id' => $merchant->getKey(),
                 'merchant_code' => $merchant->code,
                 'service_id' => $serviceId,
-                'environment' => $attributes['environment'],
+                'environment' => $env,
                 'provisioning_request_id' => $request->getKey(),
             ]);
 
             return $request->load('merchant');
         }
 
+        if ($merchant->name === $attributes['name']) {
+            $existingAnyRequest = InternalMerchantProvisioningRequest::query()
+                ->where('merchant_id', $merchant->getKey())
+                ->where('service_id', $serviceId)
+                ->latest('id')
+                ->first();
+
+            if ($existingAnyRequest !== null) {
+                return $existingAnyRequest->load('merchant');
+            }
+        }
+
         Log::warning('Provisioning merchant ditolak karena identitas mapping berbeda.', [
             'merchant_id' => $merchant->getKey(),
             'merchant_code' => $merchant->code,
             'service_id' => $serviceId,
-            'environment' => $attributes['environment'],
+            'environment' => $env,
             'mapping_found_for_service_environment' => $request !== null,
         ]);
 

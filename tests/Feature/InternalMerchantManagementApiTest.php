@@ -267,7 +267,7 @@ class InternalMerchantManagementApiTest extends TestCase
         $merchant = $this->managedMerchant();
 
         $this->withToken(self::ServiceToken)
-            ->putJson($this->configurationUrl($merchant), $this->configurationPayload(['environment' => 'production']))
+            ->putJson($this->configurationUrl($merchant), $this->configurationPayload(['environment' => 'invalid_env']))
             ->assertUnprocessable();
         $this->withToken(self::ServiceToken)
             ->putJson($this->configurationUrl($merchant), $this->configurationPayload([
@@ -323,7 +323,7 @@ class InternalMerchantManagementApiTest extends TestCase
     {
         $merchant = $this->managedMerchant();
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.11']);
-        $invalidPayload = $this->configurationPayload(['environment' => 'production']);
+        $invalidPayload = $this->configurationPayload(['environment' => 'invalid_env']);
 
         for ($attempt = 0; $attempt < 10; $attempt++) {
             $this->withToken(self::ServiceToken)

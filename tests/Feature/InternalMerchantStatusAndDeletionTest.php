@@ -169,4 +169,27 @@ class InternalMerchantStatusAndDeletionTest extends TestCase
             ->first();
         $this->assertNotNull($audit);
     }
+
+    public function test_dynamic_primary_merchant_protection_protects_new_primary_and_allows_deactivating_udev_central(): void
+    {
+        $primary = Merchant::factory()->create(['code' => 'MRC-0002', 'status' => 'active']);
+        $oldCentral = Merchant::factory()->create(['code' => 'udev-central', 'status' => 'active']);
+
+        // MRC-0002 is primary, should be protected
+        $this->withToken(self::ServiceToken)
+            ->withHeader('X-Primary-Merchant-Code', 'MRC-0002')
+            ->patchJson("/api/v1/internal/merchants/{$primary->id}/status", ['status' => 'suspended'])
+            ->assertStatus(Response::HTTP_UNPROCESSABLE_ENTITY)
+            ->assertJsonPath('status', 'error')
+            ->assertJsonPath('message', 'Merchant MRC-0002 adalah merchant sistem pusat dan tidak dapat diubah statusnya.');
+
+        // udev-central is no longer primary, can be suspended if no pending payments
+        $this->withToken(self::ServiceToken)
+            ->withHeader('X-Primary-Merchant-Code', 'MRC-0002')
+            ->patchJson("/api/v1/internal/merchants/{$oldCentral->id}/status", ['status' => 'suspended'])
+            ->assertOk()
+            ->assertJsonPath('status', 'success');
+
+        $this->assertSame('suspended', $oldCentral->fresh()->status);
+    }
 }

@@ -18,7 +18,7 @@ class StoreInternalMerchantDanaConfigurationRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'environment' => ['required', 'string', 'in:sandbox'],
+            'environment' => ['required', 'string', 'in:sandbox,production'],
             'idempotency_key' => ['required', 'string', 'max:128'],
             'partner_id' => ['required', 'string', 'max:150'],
             'merchant_id' => ['required', 'string', 'max:150'],

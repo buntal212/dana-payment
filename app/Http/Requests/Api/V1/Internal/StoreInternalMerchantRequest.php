@@ -21,7 +21,7 @@ class StoreInternalMerchantRequest extends FormRequest
             'code' => ['required', 'string', 'max:60'],
             'name' => ['required', 'string', 'max:180'],
             'email' => ['nullable', 'email', 'max:255'],
-            'environment' => ['required', 'in:sandbox,production'],
+            'environment' => ['nullable', 'string', 'in:sandbox,production'],
             'idempotency_key' => ['required', 'string', 'max:128'],
         ];
     }
