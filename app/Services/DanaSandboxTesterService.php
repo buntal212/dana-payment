@@ -1229,6 +1229,7 @@ class DanaSandboxTesterService
         $isNotPermitted = ($cancelResult['response_code'] ?? null) === '4035705';
         $isInvalidMerchant = ($cancelResult['response_code'] ?? null) === '4045708';
         $isNotFound = ($cancelResult['response_code'] ?? null) === '4045701';
+        $isMissingTimestamp = ($cancelResult['response_code'] ?? null) === '4005702';
 
         $this->recordRun(
             $merchant,
@@ -1244,7 +1245,9 @@ class DanaSandboxTesterService
                         ? 'DANA Sandbox menolak pembatalan transaksi (4045708 Invalid Merchant).'
                         : ($isNotFound
                             ? 'DANA Sandbox menolak pembatalan transaksi (4045701 Transaction Not Found).'
-                            : 'DANA Sandbox menolak pembatalan transaksi.'))),
+                            : ($isMissingTimestamp
+                                ? 'DANA Sandbox menolak pembatalan transaksi (4005702 Missing Mandatory Field).'
+                                : 'DANA Sandbox menolak pembatalan transaksi.')))),
             [
                 'http_status' => $cancelResult['http_status'],
                 'response_code' => $cancelResult['response_code'],
@@ -1255,6 +1258,7 @@ class DanaSandboxTesterService
                 'partner_reference_no' => $effectiveMockCode ?? $partnerReferenceNo,
                 'original_partner_reference_no' => $cancelResult['original_partner_reference_no'] ?? null,
                 'outbound_original_partner_reference_no' => $cancelResult['outbound_original_partner_reference_no'] ?? null,
+                'x_timestamp_sent' => $cancelResult['x_timestamp_sent'] ?? true,
             ],
             $payment,
         );

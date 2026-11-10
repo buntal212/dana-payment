@@ -1915,6 +1915,157 @@ class DanaSandboxTesterApiTest extends TestCase
         $this->assertTrue($runs->every(fn (DanaSandboxTestRun $run): bool => $run->status === 'failed'));
     }
 
+    public function test_uat_cancel_order_missing_timestamp_4005702_omits_x_timestamp_header_and_records_failed_test_run(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        $payment = Payment::factory()->for($merchant)->create([
+            'environment' => 'sandbox',
+            'status' => 'pending',
+            'provider' => 'dana',
+            'partner_reference_no' => 'ORDER-CANCEL-MISSING-TS-001',
+            'metadata' => [
+                'udev_sandbox_tester' => true,
+                'udev_sandbox_payment_method' => 'dana_wallet',
+            ],
+        ]);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/cancel.htm' => Http::response([
+                'responseCode' => '4005702',
+                'responseMessage' => 'Invalid Mandatory Field X-TIMESTAMP',
+                'requestID' => 'dana-cancel-4005702-001',
+                'originalPartnerReferenceNo' => 'ORDER-CANCEL-MISSING-TS-001',
+            ], 400),
+        ]);
+
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->cancelDanaSandboxTestTransactionUrl($merchant, $payment), [
+                'reason' => 'UAT Cancel Missing Mandatory Field (4005702)',
+                'mock_code' => '4005702',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.merchant_code', $merchant->code)
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.payment_id', $payment->public_id)
+            ->assertJsonPath('data.cancel_result.http_status', 400)
+            ->assertJsonPath('data.cancel_result.response_code', '4005702')
+            ->assertJsonPath('data.cancel_result.response_message', 'Invalid Mandatory Field X-TIMESTAMP')
+            ->assertJsonPath('data.cancel_result.request_id', 'dana-cancel-4005702-001')
+            ->assertJsonPath('data.cancel_result.is_mock', true)
+            ->assertJsonPath('data.cancel_result.mock_code', '4005702')
+            ->assertJsonPath('data.cancel_result.x_timestamp_sent', false)
+            ->assertJsonPath('data.cancel_result.original_partner_reference_no', 'ORDER-CANCEL-MISSING-TS-001')
+            ->assertJsonPath('data.cancel_result.outbound_original_partner_reference_no', 'ORDER-CANCEL-MISSING-TS-001');
+
+        Http::assertSent(function (Request $request) use ($payment): bool {
+            $payload = json_decode($request->body(), true);
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://dana-sandbox.test/payment-gateway/v1.0/debit/cancel.htm'
+                && ! $request->hasHeader('X-TIMESTAMP')
+                && $request->hasHeader('X-SIGNATURE')
+                && $request->hasHeader('ORIGIN')
+                && $request->hasHeader('X-PARTNER-ID')
+                && $request->hasHeader('X-EXTERNAL-ID')
+                && $request->hasHeader('CHANNEL-ID')
+                && ! isset($payload['partnerReferenceNo'])
+                && ($payload['originalPartnerReferenceNo'] ?? null) === $payment->partner_reference_no;
+        });
+
+        // Verifies local payment status remains untouched (pending)
+        $this->assertDatabaseHas('payments', [
+            'id' => $payment->id,
+            'status' => 'pending',
+            'paid_at' => null,
+        ]);
+        $this->assertDatabaseMissing('payment_events', ['payment_id' => $payment->id]);
+
+        // Verifies run recorded as failed
+        $this->assertDatabaseHas('dana_sandbox_test_runs', [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'operation' => 'dana_sandbox_payment_cancelled',
+            'status' => 'failed',
+            'message' => 'DANA Sandbox menolak pembatalan transaksi (4005702 Missing Mandatory Field).',
+            'safe_details->x_timestamp_sent' => false,
+            'safe_details->response_code' => '4005702',
+            'safe_details->http_status' => 400,
+        ]);
+    }
+
+    public function test_uat_cancel_order_missing_timestamp_4005702_handles_repeated_requests(): void
+    {
+        $merchant = $this->managedMerchant();
+        $this->validConfiguration($merchant);
+        $payment = Payment::factory()->for($merchant)->create([
+            'environment' => 'sandbox',
+            'status' => 'pending',
+            'provider' => 'dana',
+            'partner_reference_no' => 'ORDER-CANCEL-MISSING-TS-REP-001',
+            'metadata' => [
+                'udev_sandbox_tester' => true,
+                'udev_sandbox_payment_method' => 'dana_wallet',
+            ],
+        ]);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://dana-sandbox.test/payment-gateway/v1.0/debit/cancel.htm' => Http::sequence()
+                ->push([
+                    'responseCode' => '4005702',
+                    'responseMessage' => 'Invalid Mandatory Field X-TIMESTAMP',
+                    'requestID' => 'dana-cancel-rep-400-001',
+                ], 400)
+                ->push([
+                    'responseCode' => '4005702',
+                    'responseMessage' => 'Invalid Mandatory Field X-TIMESTAMP',
+                    'requestID' => 'dana-cancel-rep-400-002',
+                ], 400),
+        ]);
+
+        // First attempt
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->cancelDanaSandboxTestTransactionUrl($merchant, $payment), [
+                'reason' => 'First attempt 4005702',
+                'mock_code' => '4005702',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.cancel_result.response_code', '4005702')
+            ->assertJsonPath('data.cancel_result.http_status', 400)
+            ->assertJsonPath('data.cancel_result.x_timestamp_sent', false);
+
+        // Repeated attempt
+        $this->withToken(self::ServiceToken)
+            ->postJson($this->cancelDanaSandboxTestTransactionUrl($merchant, $payment), [
+                'reason' => 'Repeated attempt 4005702',
+                'partner_reference_no' => '4005702',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.cancel_result.response_code', '4005702')
+            ->assertJsonPath('data.cancel_result.http_status', 400)
+            ->assertJsonPath('data.cancel_result.x_timestamp_sent', false);
+
+        // Payment status untouched
+        $this->assertDatabaseHas('payments', [
+            'id' => $payment->id,
+            'status' => 'pending',
+            'paid_at' => null,
+        ]);
+        $this->assertDatabaseMissing('payment_events', ['payment_id' => $payment->id]);
+
+        // Both recorded as failed runs
+        $runs = DanaSandboxTestRun::query()
+            ->where('merchant_id', $merchant->id)
+            ->where('payment_id', $payment->id)
+            ->where('operation', 'dana_sandbox_payment_cancelled')
+            ->get();
+
+        $this->assertCount(2, $runs);
+        $this->assertTrue($runs->every(fn (DanaSandboxTestRun $run): bool => $run->status === 'failed'));
+    }
+
     public function test_cancel_sandbox_transaction_records_failed_test_run_when_dana_rejects(): void
     {
         $merchant = $this->managedMerchant();

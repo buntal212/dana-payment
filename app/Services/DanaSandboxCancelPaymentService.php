@@ -25,6 +25,7 @@ class DanaSandboxCancelPaymentService
         '4035705', // Do Not Honor (Transaction Not Permitted)
         '4045708', // Invalid Merchant (Merchant Status Abnormal)
         '4045701', // Transaction Not Found
+        '4005702', // Missing Mandatory Field (Omit X-TIMESTAMP)
     ];
 
     public function __construct(
@@ -58,8 +59,9 @@ class DanaSandboxCancelPaymentService
     }
 
     /**
-     * Menjalankan simulasi skenario mock UAT DANA Sandbox (2025700, 4035705, 4045708, 4045701).
-     * Mengirimkan mockCode sebagai outbound originalPartnerReferenceNo ke DANA Sandbox,
+     * Menjalankan simulasi skenario mock UAT DANA Sandbox (2025700, 4035705, 4045708, 4045701, 4005702).
+     * Mengirimkan mockCode sebagai outbound originalPartnerReferenceNo ke DANA Sandbox (kecuali 4005702 yang
+     * menggunakan identifier transaksi asli dan meniadakan header X-TIMESTAMP),
      * tanpa mengubah identifier transaksi asli yang tersimpan di database lokal.
      *
      * @return array<string, mixed>
@@ -72,6 +74,10 @@ class DanaSandboxCancelPaymentService
             );
         }
 
+        if ($mockCode === '4005702') {
+            return $this->cancelMissingTimestamp($payment, $config, $reason);
+        }
+
         return $this->executeCancelRequest(
             payment: $payment,
             config: $config,
@@ -79,6 +85,28 @@ class DanaSandboxCancelPaymentService
             reason: $reason ?? "UAT Mock Cancel ({$mockCode})",
             isMock: true,
             mockCode: $mockCode,
+        );
+    }
+
+    /**
+     * Menjalankan UAT DANA Sandbox skenario Missing Mandatory Field (4005702).
+     * Mengirimkan request Cancel Order dengan identifier transaksi asli ($payment->partner_reference_no)
+     * namun dengan sengaja MENIADAKAN header X-TIMESTAMP dari outbound HTTP request.
+     *
+     * @return array<string, mixed>
+     */
+    public function cancelMissingTimestamp(Payment $payment, MerchantPaymentConfig $config, ?string $reason = null): array
+    {
+        $genuineReferenceNo = $payment->partner_reference_no ?? $payment->public_id;
+
+        return $this->executeCancelRequest(
+            payment: $payment,
+            config: $config,
+            outboundOriginalPartnerReferenceNo: $genuineReferenceNo,
+            reason: $reason ?? 'UAT Mock Cancel Missing Mandatory Field (4005702)',
+            isMock: true,
+            mockCode: '4005702',
+            omitTimestamp: true,
         );
     }
 
@@ -94,6 +122,7 @@ class DanaSandboxCancelPaymentService
         string $reason,
         bool $isMock,
         ?string $mockCode,
+        bool $omitTimestamp = false,
     ): array {
         if ($payment->environment !== 'sandbox' || $payment->provider !== 'dana') {
             throw new \LogicException('Pembatalan transaksi hanya tersedia untuk pembayaran DANA Sandbox.');
@@ -131,18 +160,23 @@ class DanaSandboxCancelPaymentService
         $signature = $this->signatureService->signTransactional('POST', self::CANCEL_PAYMENT_PATH, $body, $timestamp, $credentials->privateKey);
         $externalId = 'cancel-'.Str::ulid();
 
+        $headers = [
+            'X-SIGNATURE' => $signature,
+            'ORIGIN' => $credentials->origin,
+            'X-PARTNER-ID' => $credentials->partnerId,
+            'X-EXTERNAL-ID' => $externalId,
+            'CHANNEL-ID' => $credentials->channelId,
+        ];
+
+        if (! $omitTimestamp) {
+            $headers['X-TIMESTAMP'] = $timestamp;
+        }
+
         try {
             $response = Http::acceptJson()
                 ->timeout((int) config('services.dana.timeout', 8))
                 ->connectTimeout((int) config('services.dana.connect_timeout', 3))
-                ->withHeaders([
-                    'X-TIMESTAMP' => $timestamp,
-                    'X-SIGNATURE' => $signature,
-                    'ORIGIN' => $credentials->origin,
-                    'X-PARTNER-ID' => $credentials->partnerId,
-                    'X-EXTERNAL-ID' => $externalId,
-                    'CHANNEL-ID' => $credentials->channelId,
-                ])
+                ->withHeaders($headers)
                 ->withBody($body, 'application/json')
                 ->post(rtrim((string) config('services.dana.base_url'), '/').self::CANCEL_PAYMENT_PATH);
         } catch (ConnectionException $exception) {
@@ -163,6 +197,7 @@ class DanaSandboxCancelPaymentService
             'partner_reference_no' => $mockCode,
             'original_partner_reference_no' => $genuineOriginalPartnerReferenceNo,
             'outbound_original_partner_reference_no' => $outboundOriginalPartnerReferenceNo,
+            'x_timestamp_sent' => ! $omitTimestamp,
             'request_id' => $this->stringOrNull($bodyData['requestID'] ?? null)
                 ?? $this->stringOrNull($response->header('X-Request-ID'))
                 ?? $this->stringOrNull($response->header('Request-Id')),
