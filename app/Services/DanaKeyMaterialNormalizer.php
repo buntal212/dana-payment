@@ -17,7 +17,7 @@ class DanaKeyMaterialNormalizer
         $details = $this->assertRsa2048($key, 'Private key');
         $signed = @openssl_sign('dana-key-material-validation', $signature, $key, OPENSSL_ALGO_SHA256);
         if ($signed !== true || ! is_string($signature) || $signature === '' || ! is_string($details['key'] ?? null)) {
-            throw new DanaKeyMaterialException('Private key tidak dapat digunakan untuk signature RSA-SHA256. Gunakan private key Sandbox merchant dari Portal DANA.');
+            throw new DanaKeyMaterialException('Private key tidak dapat digunakan untuk signature RSA-SHA256. Gunakan private key merchant yang valid dari Portal DANA.');
         }
 
         return $pem;

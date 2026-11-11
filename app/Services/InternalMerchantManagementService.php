@@ -95,6 +95,7 @@ class InternalMerchantManagementService
             'dana_configuration' => $this->publicConfigurationStatus($status),
             'configuration' => [
                 'partner_id' => $config->partner_id,
+                'client_id' => $credentials['client_id'] ?? null,
                 'merchant_id' => $credentials['merchant_id'] ?? null,
                 'origin' => $credentials['origin'] ?? null,
                 'channel_id' => $credentials['channel_id'] ?? null,
@@ -106,6 +107,7 @@ class InternalMerchantManagementService
                 'enabled' => $config->enabled,
                 'private_key_configured' => $this->credentialIsConfigured($credentials, 'private_key'),
                 'dana_webhook_public_key_configured' => $this->credentialIsConfigured($credentials, 'dana_webhook_public_key'),
+                'client_secret_configured' => $this->credentialIsConfigured($credentials, 'client_secret'),
             ],
         ];
     }
@@ -158,6 +160,8 @@ class InternalMerchantManagementService
                 'enabled' => $attributes['enabled'],
                 'encrypted_credentials' => [
                     'merchant_id' => $attributes['merchant_id'],
+                    'client_id' => $this->optionalCredentialForUpdate($attributes, $existingCredentials, 'client_id'),
+                    'client_secret' => $this->credentialForUpdate($attributes, $existingCredentials, 'client_secret'),
                     'private_key' => $privateKey,
                     'dana_webhook_public_key' => $webhookPublicKey,
                     'origin' => $attributes['origin'],

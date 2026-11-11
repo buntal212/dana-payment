@@ -21,6 +21,8 @@ class StoreInternalMerchantDanaConfigurationRequest extends FormRequest
             'environment' => ['required', 'string', 'in:sandbox,production'],
             'idempotency_key' => ['required', 'string', 'max:128'],
             'partner_id' => ['required', 'string', 'max:150'],
+            'client_id' => ['nullable', 'string', 'max:150'],
+            'client_secret' => ['nullable', 'string', 'max:255'],
             'merchant_id' => ['required', 'string', 'max:150'],
             'private_key' => ['nullable', 'string', 'max:65535'],
             'dana_webhook_public_key' => ['nullable', 'string', 'max:65535'],
