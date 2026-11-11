@@ -36,6 +36,7 @@ class PaymentService
                 $publicId = (string) Str::ulid();
                 $metadata = $attributes['metadata'] ?? null;
                 $isQrisSandbox = is_array($metadata) && ($metadata['udev_sandbox_payment_method'] ?? null) === 'qris';
+                $environment = ! empty($attributes['environment']) ? (string) $attributes['environment'] : 'sandbox';
                 $payment = Payment::query()->create([
                     'public_id' => $publicId,
                     // QRIS Create Order membatasi partnerReferenceNo menjadi 25
@@ -45,7 +46,7 @@ class PaymentService
                     'merchant_id' => $merchant->getKey(),
                     'merchant_order_id' => $attributes['merchant_order_id'],
                     'provider' => 'dana',
-                    'environment' => 'sandbox',
+                    'environment' => $environment,
                     'amount_minor' => $attributes['amount_minor'],
                     'currency' => $attributes['currency'],
                     'status' => 'pending',
@@ -95,20 +96,23 @@ class PaymentService
         }
     }
 
-    /** @param array{merchant_order_id: string, amount_minor: int, currency: string, metadata?: array<string, mixed>, idempotency_key: string} $attributes */
+    /** @param array{merchant_order_id: string, amount_minor: int, currency: string, metadata?: array<string, mixed>, idempotency_key: string, environment?: string|null} $attributes */
     public function createHostedCheckout(Merchant $merchant, array $attributes, PaymentGatewayInterface $gateway): Payment
     {
         $payment = $this->createPending($merchant, $attributes);
 
+        $environment = $payment->environment;
+
         $config = MerchantPaymentConfig::query()
             ->where('merchant_id', $merchant->getKey())
             ->where('provider', 'dana')
-            ->where('environment', 'sandbox')
+            ->where('environment', $environment)
             ->where('enabled', true)
             ->first();
 
         if ($config === null) {
-            throw new \LogicException('Konfigurasi DANA Sandbox belum tersedia untuk merchant ini.');
+            $envLabel = ucfirst($environment);
+            throw new \LogicException("Konfigurasi DANA {$envLabel} belum tersedia untuk merchant ini.");
         }
 
         if ($this->hasCompleteCheckout($payment)) {
@@ -230,12 +234,15 @@ class PaymentService
                 || (is_string($paymentCode) && $paymentCode !== ''));
     }
 
-    /** @param array{merchant_order_id: string, amount_minor: int, currency: string, metadata?: array<string, mixed>} $attributes */
+    /** @param array{merchant_order_id: string, amount_minor: int, currency: string, metadata?: array<string, mixed>, environment?: string|null} $attributes */
     private function hasSamePayload(Payment $payment, array $attributes): bool
     {
+        $expectedEnv = ! empty($attributes['environment']) ? (string) $attributes['environment'] : 'sandbox';
+
         return $payment->merchant_order_id === $attributes['merchant_order_id']
             && $payment->amount_minor === $attributes['amount_minor']
             && $payment->currency === $attributes['currency']
+            && $payment->environment === $expectedEnv
             // Metadata instruksi checkout ditambahkan oleh gateway setelah
             // request awal. Nilai internal itu bukan bagian payload merchant
             // sehingga tidak boleh membuat retry dengan Idempotency-Key sama

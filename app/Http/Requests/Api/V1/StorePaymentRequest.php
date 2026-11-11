@@ -29,6 +29,7 @@ class StorePaymentRequest extends FormRequest
             'currency' => ['required', 'string', 'size:3', 'in:IDR'],
             'metadata' => ['nullable', 'array'],
             'idempotency_key' => ['required', 'string', 'max:128'],
+            'environment' => ['nullable', 'string', 'in:sandbox,production'],
             'status' => ['prohibited'],
         ];
     }
