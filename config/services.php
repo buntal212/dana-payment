@@ -37,6 +37,10 @@ return [
 
     'dana' => [
         'base_url' => env('DANA_SANDBOX_BASE_URL', 'https://api.sandbox.dana.id'),
+        'base_urls' => [
+            'sandbox' => env('DANA_SANDBOX_BASE_URL'),
+            'production' => env('DANA_PRODUCTION_BASE_URL', 'https://api.dana.id'),
+        ],
         'timeout' => env('DANA_TIMEOUT', 8),
         'connect_timeout' => env('DANA_CONNECT_TIMEOUT', 3),
         'webhook_relative_path' => env('DANA_WEBHOOK_RELATIVE_PATH', '/api/v1/webhooks/dana'),

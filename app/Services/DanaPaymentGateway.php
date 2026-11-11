@@ -26,14 +26,34 @@ class DanaPaymentGateway implements PaymentGatewayInterface
     {
         $credentials = $this->credentialResolver->resolve($config);
         $sandboxPaymentMethod = $this->sandboxPaymentMethod($payment);
+        $environment = (string) ($config->environment ?: $payment->environment);
 
         return $sandboxPaymentMethod === null
-            ? $this->startHostedCheckout($payment, $credentials)
-            : $this->startCustomSandboxCheckout($payment, $credentials, $sandboxPaymentMethod);
+            ? $this->startHostedCheckout($payment, $credentials, $environment)
+            : $this->startCustomSandboxCheckout($payment, $credentials, $sandboxPaymentMethod, $environment);
+    }
+
+    public function resolveBaseUrl(?string $environment = null): string
+    {
+        $env = strtolower(trim((string) $environment));
+
+        if ($env === 'production') {
+            return (string) (config('services.dana.base_urls.production') ?: 'https://api.dana.id');
+        }
+
+        if ($env === 'sandbox') {
+            return (string) (config('services.dana.base_urls.sandbox')
+                ?: config('services.dana.base_url')
+                ?: 'https://api.sandbox.dana.id');
+        }
+
+        return (string) (config("services.dana.base_urls.{$env}")
+            ?: config('services.dana.base_url')
+            ?: 'https://api.sandbox.dana.id');
     }
 
     /** @return array{provider_order_id: string, checkout_url: string|null, expires_at: \DateTimeInterface, payment_instruction: array<string, mixed>} */
-    private function startHostedCheckout(Payment $payment, DanaCredentials $credentials): array
+    private function startHostedCheckout(Payment $payment, DanaCredentials $credentials, ?string $environment = null): array
     {
         $returnUrl = $this->returnUrl($payment, $credentials->returnUrl);
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
@@ -59,6 +79,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $signature = $this->signatureService->signTransactional('POST', self::CREATE_ORDER_PATH, $body, $timestamp, $credentials->privateKey);
         $this->logRequestDiagnostics($payment, $body, $timestamp, $signature, $credentials->privateKey);
+        $baseUrl = $this->resolveBaseUrl($environment);
 
         try {
             $response = Http::acceptJson()
@@ -73,7 +94,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
                     'CHANNEL-ID' => $credentials->channelId,
                 ])
                 ->withBody($body, 'application/json')
-                ->post(rtrim((string) config('services.dana.base_url'), '/').self::CREATE_ORDER_PATH);
+                ->post(rtrim($baseUrl, '/').self::CREATE_ORDER_PATH);
         } catch (ConnectionException $exception) {
             Log::warning('DANA Create Order tidak dapat dihubungi.', ['payment_id' => $payment->getKey(), 'merchant_id' => $payment->merchant_id]);
 
@@ -111,7 +132,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
     }
 
     /** @return array{provider_order_id: string, checkout_url: string|null, expires_at: \DateTimeInterface, payment_instruction: array<string, mixed>} */
-    private function startCustomSandboxCheckout(Payment $payment, DanaCredentials $credentials, DanaSandboxPaymentMethod $paymentMethod): array
+    private function startCustomSandboxCheckout(Payment $payment, DanaCredentials $credentials, DanaSandboxPaymentMethod $paymentMethod, ?string $environment = null): array
     {
         if ($paymentMethod->requiresExternalStore() && $credentials->externalStoreId === null) {
             throw new \LogicException('QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.');
@@ -149,6 +170,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $signature = $this->signatureService->signTransactional('POST', self::CREATE_ORDER_PATH, $body, $timestamp, $credentials->privateKey);
         $this->logRequestDiagnostics($payment, $body, $timestamp, $signature, $credentials->privateKey);
+        $baseUrl = $this->resolveBaseUrl($environment);
 
         try {
             $response = Http::acceptJson()
@@ -163,7 +185,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
                     'CHANNEL-ID' => $credentials->channelId,
                 ])
                 ->withBody($body, 'application/json')
-                ->post(rtrim((string) config('services.dana.base_url'), '/').self::CREATE_ORDER_PATH);
+                ->post(rtrim($baseUrl, '/').self::CREATE_ORDER_PATH);
         } catch (ConnectionException $exception) {
             Log::warning('DANA Custom Checkout Sandbox tidak dapat dihubungi.', ['payment_id' => $payment->getKey(), 'merchant_id' => $payment->merchant_id]);
 
