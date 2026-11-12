@@ -18,6 +18,7 @@ class InternalMerchantApiKeyResource extends JsonResource
             'id' => $this->id,
             'name' => $this->name,
             'key_prefix' => $this->key_prefix,
+            'environment' => $this->environment ?? 'sandbox',
             'abilities' => $this->abilities,
             'is_active' => $this->is_active,
             'expires_at' => $this->expires_at,

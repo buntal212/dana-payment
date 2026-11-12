@@ -14,7 +14,7 @@ class MerchantApiKey extends Model
     use HasFactory;
 
     /** @var list<string> */
-    protected $fillable = ['merchant_id', 'name', 'key_prefix', 'key_hash', 'abilities', 'expires_at', 'last_used_at', 'revoked_at', 'is_active'];
+    protected $fillable = ['merchant_id', 'environment', 'name', 'key_prefix', 'key_hash', 'abilities', 'expires_at', 'last_used_at', 'revoked_at', 'is_active'];
 
     /** @var list<string> */
     protected $hidden = ['key_hash'];
@@ -33,5 +33,11 @@ class MerchantApiKey extends Model
     public function scopeUsable(Builder $query): Builder
     {
         return $query->where('is_active', true)->whereNull('revoked_at')->where(fn (Builder $query): Builder => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()));
+    }
+
+    /** @param Builder<self> $query */
+    public function scopeForEnvironment(Builder $query, string $environment): Builder
+    {
+        return $query->where('environment', $environment);
     }
 }

@@ -232,9 +232,13 @@ class MerchantManagementController extends Controller
         ])->header('Cache-Control', 'no-store');
     }
 
-    public function apiKeys(Merchant $merchant, InternalMerchantManagementService $merchantManagementService): AnonymousResourceCollection
+    public function apiKeys(Merchant $merchant, Request $request, InternalMerchantManagementService $merchantManagementService): AnonymousResourceCollection
     {
-        return InternalMerchantApiKeyResource::collection($merchantManagementService->apiKeys($merchant, $this->serviceId()));
+        $environment = $request->query('environment');
+
+        return InternalMerchantApiKeyResource::collection(
+            $merchantManagementService->apiKeys($merchant, $this->serviceId(), is_string($environment) ? $environment : null)
+        );
     }
 
     public function revokeApiKey(Merchant $merchant, MerchantApiKey $apiKey, RevokeInternalMerchantApiKeyRequest $request, InternalMerchantManagementService $merchantManagementService): JsonResponse
@@ -272,7 +276,14 @@ class MerchantManagementController extends Controller
 
     private function issuance(InternalMerchantApiKeyIssuance $issuance): array
     {
-        return ['id' => $issuance->getKey(), 'status' => $issuance->status, 'key_prefix' => $issuance->key_prefix, 'pending_expires_at' => $issuance->pending_expires_at?->toIso8601String(), 'merchant_api_key_id' => $issuance->merchant_api_key_id];
+        return [
+            'id' => $issuance->getKey(),
+            'status' => $issuance->status,
+            'key_prefix' => $issuance->key_prefix,
+            'environment' => $issuance->environment ?? 'sandbox',
+            'pending_expires_at' => $issuance->pending_expires_at?->toIso8601String(),
+            'merchant_api_key_id' => $issuance->merchant_api_key_id,
+        ];
     }
 
     private function serviceId(): string

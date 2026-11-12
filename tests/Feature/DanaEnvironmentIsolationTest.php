@@ -249,7 +249,8 @@ class DanaEnvironmentIsolationTest extends TestCase
             ->assertJsonValidationErrors(['environment']);
 
         // 2. Production requested but config not available -> 422 error, no fallback
-        $responseNoProdConfig = $this->withToken($apiKeyData['api_key'])->postJson('/api/v1/payments', [
+        $prodApiKeyData = app(MerchantApiKeyService::class)->create($merchant, 'prod-test-key', environment: 'production');
+        $responseNoProdConfig = $this->withToken($prodApiKeyData['api_key'])->postJson('/api/v1/payments', [
             'merchant_order_id' => 'ORD-PROD-NO-CONFIG',
             'amount_minor' => 10_000,
             'currency' => 'IDR',

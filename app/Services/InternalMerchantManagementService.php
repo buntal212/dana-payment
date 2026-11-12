@@ -9,6 +9,7 @@ use App\Models\MerchantManagementAudit;
 use App\Models\MerchantPaymentConfig;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
@@ -199,11 +200,15 @@ class InternalMerchantManagementService
     /**
      * @return list<MerchantApiKey>
      */
-    public function apiKeys(Merchant $merchant, string $serviceId): array
+    public function apiKeys(Merchant $merchant, string $serviceId, ?string $environment = null): array
     {
         $this->assertServiceOwnsMerchant($merchant, $serviceId);
 
-        return $merchant->apiKeys()->orderByDesc('id')->get()->all();
+        return $merchant->apiKeys()
+            ->when($environment !== null && Schema::hasColumn('merchant_api_keys', 'environment'), fn ($q) => $q->where('environment', $environment))
+            ->orderByDesc('id')
+            ->get()
+            ->all();
     }
 
     /**

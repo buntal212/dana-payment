@@ -21,7 +21,7 @@ class InternalMerchantApiKeyIssuance extends Model
     use HasFactory;
 
     /** @var list<string> */
-    protected $fillable = ['merchant_id', 'service_id', 'idempotency_key', 'request_fingerprint', 'name', 'key_prefix', 'key_hash', 'abilities', 'expires_at', 'status', 'pending_expires_at', 'confirmed_at', 'cancelled_at', 'merchant_api_key_id'];
+    protected $fillable = ['merchant_id', 'environment', 'service_id', 'idempotency_key', 'request_fingerprint', 'name', 'key_prefix', 'key_hash', 'abilities', 'expires_at', 'status', 'pending_expires_at', 'confirmed_at', 'cancelled_at', 'merchant_api_key_id'];
 
     /** @var list<string> */
     protected $hidden = ['key_hash', 'request_fingerprint', 'idempotency_key'];

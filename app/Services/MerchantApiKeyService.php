@@ -5,24 +5,31 @@ namespace App\Services;
 use App\Models\Merchant;
 use App\Models\MerchantApiKey;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class MerchantApiKeyService
 {
     /**
      * @return array{api_key: string, api_key_record: MerchantApiKey}
      */
-    public function create(Merchant $merchant, string $name, ?\DateTimeInterface $expiresAt = null, ?array $abilities = null): array
+    public function create(Merchant $merchant, string $name, ?\DateTimeInterface $expiresAt = null, ?array $abilities = null, ?string $environment = 'sandbox'): array
     {
         $apiKey = $this->generateApiKey();
 
-        $record = $merchant->apiKeys()->create([
+        $data = [
             'name' => $name,
             'key_prefix' => $this->prefix($apiKey),
             'key_hash' => hash('sha256', $apiKey),
             'abilities' => $abilities,
             'expires_at' => $expiresAt,
             'is_active' => true,
-        ]);
+        ];
+
+        if (Schema::hasColumn('merchant_api_keys', 'environment')) {
+            $data['environment'] = $environment ?: 'sandbox';
+        }
+
+        $record = $merchant->apiKeys()->create($data);
 
         return ['api_key' => $apiKey, 'api_key_record' => $record];
     }
@@ -32,7 +39,7 @@ class MerchantApiKeyService
         return 'dpk_'.rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
     }
 
-    public function authenticate(string $apiKey, ?string $ability = null): ?MerchantApiKey
+    public function authenticate(string $apiKey, ?string $ability = null, ?string $environment = null): ?MerchantApiKey
     {
         $record = MerchantApiKey::query()
             ->with('merchant')
@@ -45,6 +52,10 @@ class MerchantApiKeyService
         }
 
         if ($record->merchant === null || $record->merchant->status !== 'active' || ! $this->can($record, $ability)) {
+            return null;
+        }
+
+        if ($environment !== null && ! empty($record->environment) && $record->environment !== $environment) {
             return null;
         }
 

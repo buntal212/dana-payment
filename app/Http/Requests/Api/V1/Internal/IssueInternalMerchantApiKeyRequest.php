@@ -14,7 +14,14 @@ class IssueInternalMerchantApiKeyRequest extends FormRequest
 
     public function rules(): array
     {
-        return ['environment' => ['required', 'in:sandbox'], 'name' => ['required', 'string', 'max:120'], 'abilities' => ['required', 'array', 'min:1', 'max:10'], 'abilities.*' => ['string', 'in:payments:create,payments:read,payments:*'], 'expires_at' => ['nullable', 'date', 'after:now'], 'idempotency_key' => ['prohibited']];
+        return [
+            'environment' => ['required', 'string', 'in:sandbox,production'],
+            'name' => ['required', 'string', 'max:120'],
+            'abilities' => ['required', 'array', 'min:1', 'max:10'],
+            'abilities.*' => ['string', 'in:payments:create,payments:read,payments:*'],
+            'expires_at' => ['nullable', 'date', 'after:now'],
+            'idempotency_key' => ['prohibited'],
+        ];
     }
 
     public function after(): array

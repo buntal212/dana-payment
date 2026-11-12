@@ -20,6 +20,7 @@ class MerchantApiKeyFactory extends Factory
     {
         return [
             'merchant_id' => Merchant::factory(),
+            'environment' => 'sandbox',
             'name' => 'testing',
             'key_prefix' => fake()->unique()->lexify('dpk_????????????????'),
             'key_hash' => hash('sha256', fake()->uuid()),

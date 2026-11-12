@@ -28,8 +28,16 @@ class PaymentController extends Controller
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
 
+        $apiKey = $request->attributes->get('merchant_api_key');
+        $keyEnv = $apiKey?->environment ?: 'sandbox';
+
+        if ($request->has('environment') && $request->query('environment') !== $keyEnv) {
+            abort(403, "API key environment ({$keyEnv}) tidak dapat digunakan untuk query environment {$request->query('environment')}.");
+        }
+
         $payments = Payment::query()
             ->forMerchant($this->merchant($request))
+            ->where('environment', $keyEnv)
             ->when($validated['status'] ?? null, fn ($query, string $status) => $query->where('status', $status))
             ->when($validated['merchant_order_id'] ?? null, fn ($query, string $orderId) => $query->where('merchant_order_id', $orderId))
             ->latest('id')
@@ -41,8 +49,19 @@ class PaymentController extends Controller
 
     public function store(StorePaymentRequest $request, PaymentService $paymentService, PaymentGatewayInterface $gateway): PaymentResource
     {
+        $apiKey = $request->attributes->get('merchant_api_key');
+        $keyEnv = $apiKey?->environment ?: 'sandbox';
+        $payload = $request->validated();
+        $requestedEnv = $payload['environment'] ?? 'sandbox';
+
+        if ($requestedEnv !== $keyEnv) {
+            abort(403, "API key environment ({$keyEnv}) tidak dapat digunakan untuk request {$requestedEnv}.");
+        }
+
+        $payload['environment'] = $keyEnv;
+
         try {
-            $payment = $paymentService->createHostedCheckout($this->merchant($request), $request->validated(), $gateway);
+            $payment = $paymentService->createHostedCheckout($this->merchant($request), $payload, $gateway);
         } catch (HttpExceptionInterface $exception) {
             throw $exception;
         } catch (\LogicException $exception) {
@@ -200,6 +219,13 @@ class PaymentController extends Controller
 
     private function paymentForMerchant(Request $request, string $publicId): Payment
     {
-        return Payment::query()->forMerchant($this->merchant($request))->where('public_id', $publicId)->firstOrFail();
+        $apiKey = $request->attributes->get('merchant_api_key');
+        $keyEnv = $apiKey?->environment ?: 'sandbox';
+
+        return Payment::query()
+            ->forMerchant($this->merchant($request))
+            ->where('environment', $keyEnv)
+            ->where('public_id', $publicId)
+            ->firstOrFail();
     }
 }

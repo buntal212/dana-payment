@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 
@@ -30,11 +31,12 @@ class InternalMerchantApiKeyIssuanceService
     public function issue(Merchant $merchant, array $attributes, string $serviceId): array
     {
         $fingerprint = $this->fingerprint($attributes, ['idempotency_key']);
+        $environment = (string) ($attributes['environment'] ?? 'sandbox');
 
         try {
-            return DB::transaction(function () use ($merchant, $attributes, $serviceId, $fingerprint): array {
+            return DB::transaction(function () use ($merchant, $attributes, $serviceId, $fingerprint, $environment): array {
                 $lockedMerchant = Merchant::query()->lockForUpdate()->findOrFail($merchant->getKey());
-                $this->assertIssuableMerchant($lockedMerchant, $serviceId);
+                $this->assertIssuableMerchant($lockedMerchant, $serviceId, $environment);
                 $existing = InternalMerchantApiKeyIssuance::query()->where('service_id', $serviceId)->where('idempotency_key', $attributes['idempotency_key'])->lockForUpdate()->first();
                 if ($existing !== null) {
                     $this->assertSameFingerprint($existing->request_fingerprint, $fingerprint);
@@ -42,13 +44,18 @@ class InternalMerchantApiKeyIssuanceService
                     return ['issuance' => $existing, 'api_key' => null, 'replayed' => true];
                 }
 
-                $this->expirePendingIssuances($lockedMerchant, $serviceId);
-                if ($lockedMerchant->internalApiKeyIssuances()->where('status', InternalMerchantApiKeyIssuance::StatusPending)->exists()) {
+                $this->expirePendingIssuances($lockedMerchant, $serviceId, $environment);
+                $pendingQuery = $lockedMerchant->internalApiKeyIssuances()
+                    ->where('status', InternalMerchantApiKeyIssuance::StatusPending);
+                if (Schema::hasColumn('internal_merchant_api_key_issuances', 'environment')) {
+                    $pendingQuery->where('environment', $environment);
+                }
+                if ($pendingQuery->exists()) {
                     throw new ConflictHttpException('Penerbitan API key sebelumnya masih menunggu konfirmasi penyimpanan secret.');
                 }
 
                 $apiKey = $this->merchantApiKeyService->generateApiKey();
-                $reservedApiKey = MerchantApiKey::query()->create([
+                $reservedApiKeyData = [
                     'merchant_id' => $lockedMerchant->getKey(),
                     'name' => $attributes['name'],
                     'key_prefix' => substr($apiKey, 0, 24),
@@ -56,16 +63,38 @@ class InternalMerchantApiKeyIssuanceService
                     'abilities' => $attributes['abilities'] ?? null,
                     'expires_at' => ($attributes['expires_at'] ?? null) === null ? null : Carbon::parse($attributes['expires_at']),
                     'is_active' => false,
-                ]);
-                $issuance = InternalMerchantApiKeyIssuance::query()->create([
-                    'merchant_id' => $lockedMerchant->getKey(), 'service_id' => $serviceId, 'idempotency_key' => $attributes['idempotency_key'],
-                    'request_fingerprint' => $fingerprint, 'name' => $attributes['name'], 'key_prefix' => substr($apiKey, 0, 24),
-                    'key_hash' => hash('sha256', $apiKey), 'abilities' => $attributes['abilities'] ?? null,
+                ];
+                if (Schema::hasColumn('merchant_api_keys', 'environment')) {
+                    $reservedApiKeyData['environment'] = $environment;
+                }
+                $reservedApiKey = MerchantApiKey::query()->create($reservedApiKeyData);
+
+                $issuanceData = [
+                    'merchant_id' => $lockedMerchant->getKey(),
+                    'service_id' => $serviceId,
+                    'idempotency_key' => $attributes['idempotency_key'],
+                    'request_fingerprint' => $fingerprint,
+                    'name' => $attributes['name'],
+                    'key_prefix' => substr($apiKey, 0, 24),
+                    'key_hash' => hash('sha256', $apiKey),
+                    'abilities' => $attributes['abilities'] ?? null,
                     'expires_at' => ($attributes['expires_at'] ?? null) === null ? null : Carbon::parse($attributes['expires_at']),
-                    'status' => InternalMerchantApiKeyIssuance::StatusPending, 'pending_expires_at' => now()->addMinutes($this->pendingTtlMinutes()),
+                    'status' => InternalMerchantApiKeyIssuance::StatusPending,
+                    'pending_expires_at' => now()->addMinutes($this->pendingTtlMinutes()),
                     'merchant_api_key_id' => $reservedApiKey->getKey(),
+                ];
+                if (Schema::hasColumn('internal_merchant_api_key_issuances', 'environment')) {
+                    $issuanceData['environment'] = $environment;
+                }
+                $issuance = InternalMerchantApiKeyIssuance::query()->create($issuanceData);
+
+                $this->audit($lockedMerchant, $serviceId, self::OperationIssued, $fingerprint, [
+                    'issuance_id' => $issuance->getKey(),
+                    'merchant_api_key_id' => $reservedApiKey->getKey(),
+                    'status' => $issuance->status,
+                    'key_prefix' => $issuance->key_prefix,
+                    'environment' => $environment,
                 ]);
-                $this->audit($lockedMerchant, $serviceId, self::OperationIssued, $fingerprint, ['issuance_id' => $issuance->getKey(), 'merchant_api_key_id' => $reservedApiKey->getKey(), 'status' => $issuance->status, 'key_prefix' => $issuance->key_prefix]);
 
                 return ['issuance' => $issuance, 'api_key' => $apiKey, 'replayed' => false];
             });
@@ -155,9 +184,13 @@ class InternalMerchantApiKeyIssuanceService
         });
     }
 
-    private function assertIssuableMerchant(Merchant $merchant, string $serviceId): void
+    private function assertIssuableMerchant(Merchant $merchant, string $serviceId, ?string $environment = null): void
     {
-        if (! $merchant->internalProvisioningRequests()->where('service_id', $serviceId)->where('environment', 'sandbox')->exists()) {
+        $hasProvisioning = $merchant->internalProvisioningRequests()
+            ->where('service_id', $serviceId)
+            ->exists();
+
+        if (! $hasProvisioning) {
             throw (new ModelNotFoundException)->setModel(Merchant::class, [$merchant->getKey()]);
         }
         if ($merchant->code === self::ProtectedMerchantCode) {
@@ -178,12 +211,17 @@ class InternalMerchantApiKeyIssuanceService
         return $locked;
     }
 
-    private function expirePendingIssuances(Merchant $merchant, string $serviceId): void
+    private function expirePendingIssuances(Merchant $merchant, string $serviceId, ?string $environment = null): void
     {
-        $merchant->internalApiKeyIssuances()
+        $query = $merchant->internalApiKeyIssuances()
             ->where('status', InternalMerchantApiKeyIssuance::StatusPending)
-            ->where('pending_expires_at', '<=', now())
-            ->lockForUpdate()
+            ->where('pending_expires_at', '<=', now());
+
+        if ($environment !== null && Schema::hasColumn('internal_merchant_api_key_issuances', 'environment')) {
+            $query->where('environment', $environment);
+        }
+
+        $query->lockForUpdate()
             ->get()
             ->each(function (InternalMerchantApiKeyIssuance $issuance) use ($merchant, $serviceId): void {
                 $this->deactivateReservedApiKey($merchant, $issuance);
@@ -257,7 +295,14 @@ class InternalMerchantApiKeyIssuanceService
 
     private function safeResult(InternalMerchantApiKeyIssuance $issuance): array
     {
-        return ['issuance_id' => $issuance->getKey(), 'status' => $issuance->status, 'key_prefix' => $issuance->key_prefix, 'pending_expires_at' => $issuance->pending_expires_at?->toIso8601String(), 'merchant_api_key_id' => $issuance->merchant_api_key_id];
+        return [
+            'issuance_id' => $issuance->getKey(),
+            'status' => $issuance->status,
+            'key_prefix' => $issuance->key_prefix,
+            'environment' => $issuance->environment ?? 'sandbox',
+            'pending_expires_at' => $issuance->pending_expires_at?->toIso8601String(),
+            'merchant_api_key_id' => $issuance->merchant_api_key_id,
+        ];
     }
 
     private function audit(Merchant $merchant, string $serviceId, string $operation, string $fingerprint, array $safeDetails): void
