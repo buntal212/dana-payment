@@ -243,6 +243,34 @@ class DanaSandboxQueryPaymentServiceTest extends TestCase
         }
     }
 
+    public function test_query_returns_4045501_transaction_not_found_status(): void
+    {
+        [$merchant, $config] = $this->createMerchantConfig('production');
+        $payment = Payment::factory()->for($merchant)->create([
+            'environment' => 'production',
+            'provider' => 'dana',
+            'partner_reference_no' => 'PROD-NOTFOUND-001',
+            'public_id' => '01HZY000000000000000000003',
+            'status' => 'pending',
+        ]);
+
+        Http::fake([
+            'https://api.saas.dana.id/payment-gateway/v1.0/debit/status.htm' => Http::response([
+                'responseCode' => '4045501',
+                'responseMessage' => 'Transaction Not Found',
+                'requestID' => 'dana-req-notfound-001',
+            ], 404),
+        ]);
+
+        $result = $this->service->query($payment, $config);
+
+        $this->assertSame(404, $result['http_status']);
+        $this->assertSame('4045501', $result['response_code']);
+        $this->assertSame('Transaction Not Found', $result['response_message']);
+        $this->assertNull($result['latest_transaction_status']);
+        $this->assertSame('dana-req-notfound-001', $result['request_id']);
+    }
+
     public function test_sandbox_uat_functions_remain_isolated_to_sandbox(): void
     {
         [$merchantProd, $configProd] = $this->createMerchantConfig('production');

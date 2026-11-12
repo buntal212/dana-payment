@@ -246,7 +246,7 @@ class DanaHostedCheckoutTest extends TestCase
             if (str_ends_with($request->url(), '/debit/status.htm')) {
                 $this->assertSame($payment->partner_reference_no, $request->data()['originalPartnerReferenceNo']);
 
-                return ['responseCode' => '2005500', 'latestTransactionStatus' => '01', 'requestID' => 'recovery-query-047'];
+                return ['responseCode' => '4045501', 'responseMessage' => 'Transaction Not Found', 'requestID' => 'recovery-query-047'];
             }
 
             $this->assertSame($payment->partner_reference_no, $request->data()['partnerReferenceNo']);
@@ -316,6 +316,173 @@ class DanaHostedCheckoutTest extends TestCase
         $this->assertCount(1, $requests);
     }
 
+    public function test_partial_checkout_blocks_create_order_when_query_reports_pending_status_01(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig('production');
+        $payment = Payment::factory()->for($merchant)->create([
+            'merchant_order_id' => 'invoice-87-attempt-67',
+            'environment' => 'production',
+            'provider' => 'dana',
+            'amount_minor' => 100_500,
+            'currency' => 'IDR',
+            'status' => 'pending',
+            'idempotency_key' => 'invoice-87-attempt-67-pending-checkout',
+            'checkout_url' => null,
+            'expires_at' => null,
+            'metadata' => [],
+        ]);
+
+        $requests = [];
+        Http::fake(function (HttpRequest $request) use (&$requests): array {
+            $requests[] = $request;
+
+            $this->assertSame('https://api.saas.dana.id/payment-gateway/v1.0/debit/status.htm', $request->url());
+
+            return ['responseCode' => '2005500', 'latestTransactionStatus' => '01', 'requestID' => 'recovery-query-pending'];
+        });
+
+        try {
+            app(PaymentService::class)->createHostedCheckout($merchant, [
+                'merchant_order_id' => $payment->merchant_order_id,
+                'environment' => 'production',
+                'amount_minor' => 100_500,
+                'currency' => 'IDR',
+                'idempotency_key' => $payment->idempotency_key,
+                'metadata' => [],
+            ], app(DanaPaymentGateway::class));
+            $this->fail('Create Order seharusnya diblokir ketika query melaporkan transaksi masih pending (01).');
+        } catch (\RuntimeException $exception) {
+            $this->assertStringContainsString('DANA melaporkan transaksi sudah terdaftar dengan status 01; pembuatan order baru diblokir.', $exception->getMessage());
+        }
+
+        $this->assertSame('pending', $payment->fresh()->status);
+        $this->assertNull($payment->fresh()->checkout_url);
+        $this->assertCount(1, $requests);
+    }
+
+    public function test_partial_checkout_blocks_create_order_when_query_reports_cancelled_status_05(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig('production');
+        $payment = Payment::factory()->for($merchant)->create([
+            'merchant_order_id' => 'invoice-87-attempt-67-cancel',
+            'environment' => 'production',
+            'provider' => 'dana',
+            'amount_minor' => 100_500,
+            'currency' => 'IDR',
+            'status' => 'pending',
+            'idempotency_key' => 'invoice-87-attempt-67-cancel-checkout',
+            'checkout_url' => null,
+            'expires_at' => null,
+            'metadata' => [],
+        ]);
+
+        $requests = [];
+        Http::fake(function (HttpRequest $request) use (&$requests): array {
+            $requests[] = $request;
+
+            return ['responseCode' => '2005500', 'latestTransactionStatus' => '05', 'requestID' => 'recovery-query-cancel'];
+        });
+
+        try {
+            app(PaymentService::class)->createHostedCheckout($merchant, [
+                'merchant_order_id' => $payment->merchant_order_id,
+                'environment' => 'production',
+                'amount_minor' => 100_500,
+                'currency' => 'IDR',
+                'idempotency_key' => $payment->idempotency_key,
+                'metadata' => [],
+            ], app(DanaPaymentGateway::class));
+            $this->fail('Create Order seharusnya diblokir ketika query melaporkan transaksi sudah terdaftar dengan status 05.');
+        } catch (\RuntimeException $exception) {
+            $this->assertStringContainsString('DANA melaporkan transaksi sudah terdaftar dengan status 05; pembuatan order baru diblokir.', $exception->getMessage());
+        }
+
+        $this->assertSame('pending', $payment->fresh()->status);
+        $this->assertCount(1, $requests);
+    }
+
+    public function test_partial_checkout_blocks_create_order_when_query_reports_error_or_unknown_response_code(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig('production');
+        $payment = Payment::factory()->for($merchant)->create([
+            'merchant_order_id' => 'invoice-87-attempt-67-error',
+            'environment' => 'production',
+            'provider' => 'dana',
+            'amount_minor' => 100_500,
+            'currency' => 'IDR',
+            'status' => 'pending',
+            'idempotency_key' => 'invoice-87-attempt-67-error-checkout',
+            'checkout_url' => null,
+            'expires_at' => null,
+            'metadata' => [],
+        ]);
+
+        $requests = [];
+        Http::fake(function (HttpRequest $request) use (&$requests): array {
+            $requests[] = $request;
+
+            return ['responseCode' => '5005500', 'responseMessage' => 'Internal Server Error', 'requestID' => 'recovery-query-error'];
+        });
+
+        try {
+            app(PaymentService::class)->createHostedCheckout($merchant, [
+                'merchant_order_id' => $payment->merchant_order_id,
+                'environment' => 'production',
+                'amount_minor' => 100_500,
+                'currency' => 'IDR',
+                'idempotency_key' => $payment->idempotency_key,
+                'metadata' => [],
+            ], app(DanaPaymentGateway::class));
+            $this->fail('Create Order seharusnya diblokir ketika query melaporkan response code selain 4045501.');
+        } catch (\RuntimeException $exception) {
+            $this->assertStringContainsString('Status order DANA tidak mengonfirmasi transaksi belum dibuat (responseCode: 5005500); pembuatan order baru diblokir demi keamanan.', $exception->getMessage());
+        }
+
+        $this->assertSame('pending', $payment->fresh()->status);
+        $this->assertCount(1, $requests);
+    }
+
+    public function test_partial_checkout_blocks_create_order_when_query_connection_fails(): void
+    {
+        [$merchant] = $this->merchantWithDanaConfig('production');
+        $payment = Payment::factory()->for($merchant)->create([
+            'merchant_order_id' => 'invoice-87-attempt-67-timeout',
+            'environment' => 'production',
+            'provider' => 'dana',
+            'amount_minor' => 100_500,
+            'currency' => 'IDR',
+            'status' => 'pending',
+            'idempotency_key' => 'invoice-87-attempt-67-timeout-checkout',
+            'checkout_url' => null,
+            'expires_at' => null,
+            'metadata' => [],
+        ]);
+
+        Http::fake(function (): void {
+            throw new \Illuminate\Http\Client\ConnectionException('Connection timed out');
+        });
+
+        try {
+            app(PaymentService::class)->createHostedCheckout($merchant, [
+                'merchant_order_id' => $payment->merchant_order_id,
+                'environment' => 'production',
+                'amount_minor' => 100_500,
+                'currency' => 'IDR',
+                'idempotency_key' => $payment->idempotency_key,
+                'metadata' => [],
+            ], app(DanaPaymentGateway::class));
+            $this->fail('Create Order seharusnya diblokir ketika koneksi query gagal.');
+        } catch (\RuntimeException $exception) {
+            $this->assertStringContainsString('Status order DANA belum dapat direkonsiliasi sebelum recovery checkout.', $exception->getMessage());
+        }
+
+        $this->assertSame('pending', $payment->fresh()->status);
+        $this->assertDatabaseHas('payment_events', [
+            'payment_id' => $payment->id,
+            'event_type' => 'payment.checkout_recovery_failed',
+        ]);
+    }
+
     public function test_partial_checkout_in_production_queries_saas_endpoint_and_recovers_payment(): void
     {
         [$merchant] = $this->merchantWithDanaConfig('production');
@@ -340,7 +507,7 @@ class DanaHostedCheckoutTest extends TestCase
                 $this->assertSame('https://api.saas.dana.id/payment-gateway/v1.0/debit/status.htm', $request->url());
                 $this->assertSame($payment->public_id, $request->data()['originalPartnerReferenceNo']);
 
-                return ['responseCode' => '2005500', 'latestTransactionStatus' => '01', 'requestID' => 'recovery-query-prod-087'];
+                return ['responseCode' => '4045501', 'responseMessage' => 'Transaction Not Found', 'requestID' => 'recovery-query-prod-087'];
             }
 
             return [

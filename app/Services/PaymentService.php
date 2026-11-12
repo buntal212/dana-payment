@@ -212,12 +212,29 @@ class PaymentService
             ],
         ]);
 
+        $responseCode = $providerStatus['response_code'] ?? null;
+        $latestStatus = $providerStatus['latest_transaction_status'] ?? null;
+
         // Status paid tetap hanya dapat diterapkan oleh Finish Notify yang
         // tervalidasi. Recovery tidak boleh membuat order baru ketika DANA
         // sudah melaporkan transaksi berhasil.
-        if (($providerStatus['response_code'] ?? null) === '2005500'
-            && ($providerStatus['latest_transaction_status'] ?? null) === '00') {
+        if ($responseCode === '2005500' && $latestStatus === '00') {
             throw new \RuntimeException('DANA telah melaporkan pembayaran berhasil; menunggu Finish Notify terverifikasi.');
+        }
+
+        // Transaksi ditemukan di DANA namun belum dibayar (misal status pending 01, expired/cancelled 05, dll).
+        // Pembuatan order baru diblokir untuk mencegah order ganda pada DANA.
+        if ($responseCode === '2005500') {
+            $statusLabel = $latestStatus !== null ? (string) $latestStatus : 'tidak diketahui';
+            throw new \RuntimeException("DANA melaporkan transaksi sudah terdaftar dengan status {$statusLabel}; pembuatan order baru diblokir.");
+        }
+
+        // Fail-closed recovery: Create Order HANYA boleh dilanjutkan jika Query Payment
+        // secara eksplisit mengonfirmasi 4045501 (Transaction Not Found).
+        // Semua status transaksi ditemukan, Paid, Pending, error, timeout, atau respons tidak dikenal wajib memblokir Create Order.
+        if ($responseCode !== '4045501') {
+            $codeLabel = $responseCode !== null ? (string) $responseCode : 'tidak diketahui';
+            throw new \RuntimeException("Status order DANA tidak mengonfirmasi transaksi belum dibuat (responseCode: {$codeLabel}); pembuatan order baru diblokir demi keamanan.");
         }
     }
 
