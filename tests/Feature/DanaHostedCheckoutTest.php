@@ -80,6 +80,44 @@ class DanaHostedCheckoutTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_create_order_logs_response_diagnostics_with_truncated_response_message(): void
+    {
+        [$merchant, $apiKey] = $this->merchantWithDanaConfig();
+        Log::spy();
+        $longMessage = str_repeat('A', 250);
+
+        Http::fake(function () use ($longMessage): array {
+            return [
+                'responseCode' => '2005400',
+                'responseMessage' => $longMessage,
+                'referenceNo' => 'DANA-ORDER-DIAG',
+                'webRedirectUrl' => 'https://checkout.sandbox.dana.id/session/diag',
+            ];
+        });
+
+        $this->withToken($apiKey)->postJson('/api/v1/payments', [
+            'merchant_order_id' => 'order-dana-diag-001',
+            'amount_minor' => 10_000,
+            'currency' => 'IDR',
+        ], ['Idempotency-Key' => 'dana-checkout-diag-001'])
+            ->assertSuccessful();
+
+        Log::shouldHaveReceived('debug')->withArgs(function (string $message, array $context) use ($longMessage): bool {
+            if ($message !== 'Diagnostik respons DANA Create Order.') {
+                return false;
+            }
+
+            return $context['response_code'] === '2005400'
+                && $context['response_message'] === substr($longMessage, 0, 200)
+                && strlen($context['response_message']) === 200
+                && ! array_key_exists('private_key', $context)
+                && ! array_key_exists('signature', $context)
+                && ! array_key_exists('body', $context)
+                && ! array_key_exists('token', $context)
+                && ! array_key_exists('api_key', $context);
+        })->once();
+    }
+
     public function test_sandbox_tester_checkout_appends_only_its_valid_return_context_to_registered_callback(): void
     {
         [$merchant] = $this->merchantWithDanaConfig();

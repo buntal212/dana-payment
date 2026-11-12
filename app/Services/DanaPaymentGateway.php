@@ -362,11 +362,19 @@ class DanaPaymentGateway implements PaymentGatewayInterface
             return;
         }
 
+        $rawMessage = is_array($responseBody)
+            ? ($responseBody['responseMessage'] ?? $responseBody['response_message'] ?? null)
+            : null;
+        $responseMessage = is_string($rawMessage) && $rawMessage !== ''
+            ? mb_substr($rawMessage, 0, 200)
+            : null;
+
         Log::debug('Diagnostik respons DANA Create Order.', [
             'payment_id' => $payment->getKey(),
             'merchant_id' => $payment->merchant_id,
             'http_status' => $response->status(),
             'response_code' => is_array($responseBody) ? ($responseBody['responseCode'] ?? null) : null,
+            'response_message' => $responseMessage,
             'request_id' => $response->header('X-Request-ID') ?? $response->header('Request-Id'),
         ]);
     }
