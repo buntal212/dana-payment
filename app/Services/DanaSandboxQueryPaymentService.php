@@ -23,17 +23,46 @@ class DanaSandboxQueryPaymentService
         private DanaSnapSignatureService $signatureService,
     ) {}
 
+    public function resolveBaseUrl(?string $environment = null): string
+    {
+        $env = strtolower(trim((string) $environment));
+
+        if ($env === 'production') {
+            $configured = config('services.dana.base_urls.production');
+            if (is_string($configured) && $configured !== '' && $configured !== 'https://api.dana.id') {
+                return $configured;
+            }
+
+            return 'https://api.saas.dana.id';
+        }
+
+        return (string) (config('services.dana.base_urls.sandbox')
+            ?: config('services.dana.base_url')
+            ?: 'https://api.sandbox.dana.id');
+    }
+
     /** @return array<string, int|string|null> */
     public function query(Payment $payment, MerchantPaymentConfig $config): array
     {
-        if ($payment->environment !== 'sandbox' || $payment->provider !== 'dana') {
-            throw new \LogicException('Query Payment hanya tersedia untuk pembayaran DANA Sandbox.');
+        if ($payment->provider !== 'dana') {
+            throw new \LogicException('Query Payment hanya tersedia untuk pembayaran DANA.');
+        }
+
+        if (! in_array($payment->environment, ['sandbox', 'production'], true)) {
+            $envLabel = ucfirst((string) $payment->environment);
+            throw new \LogicException("Query Payment tidak tersedia untuk environment DANA {$envLabel}.");
+        }
+
+        if ($config->environment !== $payment->environment) {
+            $envLabel = ucfirst((string) $payment->environment);
+            throw new \LogicException("Query Payment memerlukan konfigurasi DANA {$envLabel}.");
         }
 
         $credentials = $this->credentialResolver->resolve($config);
         $method = is_array($payment->metadata) ? ($payment->metadata['udev_sandbox_payment_method'] ?? null) : null;
         if ($method === DanaSandboxPaymentMethod::Qris->value && $credentials->externalStoreId === null) {
-            throw new \LogicException('QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.');
+            $envLabel = ucfirst((string) $payment->environment);
+            throw new \LogicException("QRIS {$envLabel} memerlukan External Store ID pada konfigurasi merchant.");
         }
 
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
@@ -51,6 +80,7 @@ class DanaSandboxQueryPaymentService
 
         $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $signature = $this->signatureService->signTransactional('POST', self::QUERY_PAYMENT_PATH, $body, $timestamp, $credentials->privateKey);
+        $baseUrl = $this->resolveBaseUrl($payment->environment);
 
         try {
             $response = Http::acceptJson()
@@ -65,9 +95,10 @@ class DanaSandboxQueryPaymentService
                     'CHANNEL-ID' => $credentials->channelId,
                 ])
                 ->withBody($body, 'application/json')
-                ->post(rtrim((string) config('services.dana.base_url'), '/').self::QUERY_PAYMENT_PATH);
+                ->post(rtrim($baseUrl, '/').self::QUERY_PAYMENT_PATH);
         } catch (ConnectionException $exception) {
-            throw new RuntimeException('Query Payment DANA Sandbox sementara tidak tersedia.', previous: $exception);
+            $envLabel = ucfirst((string) $payment->environment);
+            throw new RuntimeException("Query Payment DANA {$envLabel} sementara tidak tersedia.", previous: $exception);
         }
 
         $responseBody = $response->json();
