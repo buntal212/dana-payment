@@ -24,13 +24,15 @@ class DanaPaymentGateway implements PaymentGatewayInterface
     /** @return array{provider_order_id: string, checkout_url: string|null, expires_at: \DateTimeInterface, payment_instruction: array<string, mixed>} */
     public function startCheckout(Payment $payment, MerchantPaymentConfig $config): array
     {
+        $this->validateEnvironmentMatch($payment, $config);
+
         $credentials = $this->credentialResolver->resolve($config);
-        $sandboxPaymentMethod = $this->sandboxPaymentMethod($payment);
+        $paymentMethod = $this->resolvePaymentMethod($payment);
         $environment = (string) ($config->environment ?: $payment->environment);
 
-        return $sandboxPaymentMethod === null
+        return $paymentMethod === null
             ? $this->startHostedCheckout($payment, $credentials, $environment)
-            : $this->startCustomSandboxCheckout($payment, $credentials, $sandboxPaymentMethod, $environment);
+            : $this->startCustomCheckout($payment, $credentials, $paymentMethod, $environment);
     }
 
     public function resolveBaseUrl(?string $environment = null): string
@@ -131,15 +133,38 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         ];
     }
 
+    private function validateEnvironmentMatch(Payment $payment, MerchantPaymentConfig $config): void
+    {
+        $paymentEnv = strtolower(trim((string) $payment->environment));
+        $configEnv = strtolower(trim((string) $config->environment));
+
+        if ($paymentEnv !== '' && $configEnv !== '' && $paymentEnv !== $configEnv) {
+            $paymentLabel = ucfirst($paymentEnv);
+            $configLabel = ucfirst($configEnv);
+            throw new \LogicException("Environment Payment ({$paymentLabel}) tidak cocok dengan konfigurasi DANA merchant ({$configLabel}).");
+        }
+    }
+
     /** @return array{provider_order_id: string, checkout_url: string|null, expires_at: \DateTimeInterface, payment_instruction: array<string, mixed>} */
     private function startCustomSandboxCheckout(Payment $payment, DanaCredentials $credentials, DanaSandboxPaymentMethod $paymentMethod, ?string $environment = null): array
     {
+        return $this->startCustomCheckout($payment, $credentials, $paymentMethod, $environment);
+    }
+
+    /** @return array{provider_order_id: string, checkout_url: string|null, expires_at: \DateTimeInterface, payment_instruction: array<string, mixed>} */
+    private function startCustomCheckout(Payment $payment, DanaCredentials $credentials, DanaSandboxPaymentMethod $paymentMethod, ?string $environment = null): array
+    {
+        $env = strtolower(trim((string) ($environment ?: $payment->environment ?: 'sandbox')));
+        $isProduction = $env === 'production';
+        $envLabel = $isProduction ? 'Production' : 'Sandbox';
+
         if ($paymentMethod->requiresExternalStore() && $credentials->externalStoreId === null) {
-            throw new \LogicException('QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.');
+            throw new \LogicException("QRIS {$envLabel} memerlukan External Store ID pada konfigurasi merchant.");
         }
 
         $timestamp = now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP');
         $expiresAt = now('Asia/Jakarta')->addMinutes(30);
+        $orderPrefix = $isProduction ? 'Payment ' : 'Sandbox ';
         $payload = [
             'partnerReferenceNo' => $this->partnerReferenceNo($payment),
             'merchantId' => $credentials->merchantId,
@@ -155,7 +180,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
                 'transAmount' => ['value' => $this->amountFormatter->formatIdr($payment->amount_minor), 'currency' => $payment->currency],
             ]],
             'additionalInfo' => [
-                'order' => ['orderTitle' => mb_substr('Sandbox '.$payment->merchant_order_id, 0, 64), 'scenario' => 'API'],
+                'order' => ['orderTitle' => mb_substr($orderPrefix.$payment->merchant_order_id, 0, 64), 'scenario' => 'API'],
                 'mcc' => $credentials->mcc,
                 'envInfo' => ['sourcePlatform' => 'IPG', 'terminalType' => 'SYSTEM'],
             ],
@@ -187,15 +212,15 @@ class DanaPaymentGateway implements PaymentGatewayInterface
                 ->withBody($body, 'application/json')
                 ->post(rtrim($baseUrl, '/').self::CREATE_ORDER_PATH);
         } catch (ConnectionException $exception) {
-            Log::warning('DANA Custom Checkout Sandbox tidak dapat dihubungi.', ['payment_id' => $payment->getKey(), 'merchant_id' => $payment->merchant_id]);
+            Log::warning("DANA Custom Checkout {$envLabel} tidak dapat dihubungi.", ['payment_id' => $payment->getKey(), 'merchant_id' => $payment->merchant_id]);
 
-            throw new RuntimeException('Checkout DANA Sandbox sementara tidak tersedia.', previous: $exception);
+            throw new RuntimeException("Checkout DANA {$envLabel} sementara tidak tersedia.", previous: $exception);
         }
 
         $responseBody = $response->json();
         $this->logResponseDiagnostics($payment, $response, $responseBody);
         if (! $response->successful() || ! is_array($responseBody) || ($responseBody['responseCode'] ?? null) !== '2005400' || ! is_string($responseBody['referenceNo'] ?? null)) {
-            Log::warning('DANA Custom Checkout Sandbox ditolak atau merespons tidak lengkap.', [
+            Log::warning("DANA Custom Checkout {$envLabel} ditolak atau merespons tidak lengkap.", [
                 'payment_id' => $payment->getKey(),
                 'merchant_id' => $payment->merchant_id,
                 'payment_method' => $paymentMethod->value,
@@ -204,7 +229,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
                 'request_id' => $response->header('X-Request-ID') ?? $response->header('Request-Id'),
             ]);
 
-            throw new RuntimeException('Checkout DANA Sandbox belum dapat dibuat.');
+            throw new RuntimeException("Checkout DANA {$envLabel} belum dapat dibuat.");
         }
 
         $checkoutUrl = is_string($responseBody['webRedirectUrl'] ?? null) ? $responseBody['webRedirectUrl'] : null;
@@ -217,29 +242,31 @@ class DanaPaymentGateway implements PaymentGatewayInterface
             $paymentCode = $qrContent;
         }
         if ($paymentMethod === DanaSandboxPaymentMethod::DanaWallet && $checkoutUrl === null) {
-            throw new RuntimeException('Respons DANA Wallet Sandbox tidak menyediakan checkout URL.');
+            throw new RuntimeException("Respons DANA Wallet {$envLabel} tidak menyediakan checkout URL.");
         }
         if ($paymentMethod !== DanaSandboxPaymentMethod::DanaWallet && $paymentCode === null) {
-            throw new RuntimeException('Respons QRIS atau Virtual Account Sandbox tidak menyediakan kode pembayaran.');
+            throw new RuntimeException("Respons QRIS atau Virtual Account {$envLabel} tidak menyediakan kode pembayaran.");
         }
 
         return [
             'provider_order_id' => $responseBody['referenceNo'],
             'checkout_url' => $checkoutUrl,
             'expires_at' => $expiresAt,
-            'payment_instruction' => $this->paymentInstruction($paymentMethod, $paymentCode, $qrContent, $responseBody),
+            'payment_instruction' => $this->paymentInstruction($paymentMethod, $paymentCode, $qrContent, $responseBody, $isProduction),
         ];
     }
 
     /** @param array<string, mixed> $responseBody @return array<string, mixed> */
-    private function paymentInstruction(DanaSandboxPaymentMethod $paymentMethod, ?string $paymentCode, ?string $qrContent, array $responseBody): array
+    private function paymentInstruction(DanaSandboxPaymentMethod $paymentMethod, ?string $paymentCode, ?string $qrContent, array $responseBody, bool $isProduction = false): array
     {
         if ($paymentMethod === DanaSandboxPaymentMethod::DanaWallet) {
             return [
                 'method' => $paymentMethod->value,
                 'label' => $paymentMethod->label(),
                 'type' => 'redirect',
-                'message' => 'Lanjutkan pembayaran pada halaman DANA Wallet Sandbox.',
+                'message' => $isProduction
+                    ? 'Lanjutkan pembayaran pada halaman DANA Wallet.'
+                    : 'Lanjutkan pembayaran pada halaman DANA Wallet Sandbox.',
             ];
         }
 
@@ -276,11 +303,17 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         ];
     }
 
-    private function sandboxPaymentMethod(Payment $payment): ?DanaSandboxPaymentMethod
+    private function resolvePaymentMethod(Payment $payment): ?DanaSandboxPaymentMethod
     {
-        $method = is_array($payment->metadata) ? ($payment->metadata['udev_sandbox_payment_method'] ?? null) : null;
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $method = $metadata['payment_method'] ?? $metadata['udev_sandbox_payment_method'] ?? null;
 
         return is_string($method) ? DanaSandboxPaymentMethod::tryFrom($method) : null;
+    }
+
+    private function sandboxPaymentMethod(Payment $payment): ?DanaSandboxPaymentMethod
+    {
+        return $this->resolvePaymentMethod($payment);
     }
 
     private function partnerReferenceNo(Payment $payment): string

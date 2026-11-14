@@ -162,7 +162,7 @@ class PaymentAuditController extends Controller
     private function payment(Payment $payment, bool $withTimeline = false): array
     {
         $metadata = is_array($payment->metadata) ? $payment->metadata : [];
-        $paymentMethod = $metadata['udev_sandbox_payment_method'] ?? null;
+        $paymentMethod = $metadata['payment_method'] ?? $metadata['udev_sandbox_payment_method'] ?? null;
 
         $data = [
             'id' => $payment->public_id,
@@ -192,7 +192,7 @@ class PaymentAuditController extends Controller
                 $data['expires_at'] = $payment->expires_at->toIso8601String();
             }
 
-            $instruction = $this->safePaymentInstruction($metadata['udev_sandbox_payment_instruction'] ?? null);
+            $instruction = $this->safePaymentInstruction($metadata['payment_instruction'] ?? $metadata['udev_sandbox_payment_instruction'] ?? null);
             if ($instruction !== null) {
                 $data['payment_instruction'] = $instruction;
             }

@@ -11,7 +11,7 @@ use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
-#[Signature('merchant:dana:configure {merchant : Kode merchant} {--environment=sandbox : Environment (sandbox atau production)} {--private-key-path= : Path PEM private key merchant} {--public-key-path= : Path PEM public key webhook DANA yang diverifikasi}')]
+#[Signature('merchant:dana:configure {merchant : Kode merchant} {--environment=sandbox : Environment (sandbox atau production)} {--private-key-path= : Path PEM private key merchant} {--public-key-path= : Path PEM public key webhook DANA yang diverifikasi} {--external-store-id= : External Store ID untuk QRIS} {--sub-merchant-id= : Sub Merchant ID jika ada}')]
 #[Description('Menyimpan konfigurasi DANA merchant secara terenkripsi')]
 class ConfigureDanaMerchant extends Command
 {
@@ -40,22 +40,63 @@ class ConfigureDanaMerchant extends Command
             return self::FAILURE;
         }
 
-        DB::transaction(function () use ($merchant, $environment, $privateKey, $publicKey): void {
+        $externalStoreIdOption = $this->option('external-store-id');
+        $subMerchantIdOption = $this->option('sub-merchant-id');
+
+        DB::transaction(function () use ($merchant, $environment, $privateKey, $publicKey, $externalStoreIdOption, $subMerchantIdOption): void {
+            $existingConfig = MerchantPaymentConfig::query()
+                ->where('merchant_id', $merchant->getKey())
+                ->where('provider', 'dana')
+                ->where('environment', $environment)
+                ->first();
+            $existingCredentials = is_array($existingConfig?->encrypted_credentials)
+                ? $existingConfig->encrypted_credentials
+                : [];
+
+            $partnerId = (string) $this->ask('X-PARTNER-ID');
+            $callbackUrl = (string) $this->ask('URL PAY_RETURN HTTPS');
+            $merchantId = (string) $this->ask('DANA Merchant ID');
+            $origin = (string) $this->ask('ORIGIN');
+            $channelId = (string) $this->ask('CHANNEL-ID');
+            $notificationUrl = (string) $this->ask('URL NOTIFICATION HTTPS');
+            $mcc = (string) $this->ask('MCC');
+
+            $credentials = [
+                ...$existingCredentials,
+                'merchant_id' => $merchantId,
+                'private_key' => $privateKey,
+                'dana_webhook_public_key' => $publicKey,
+                'origin' => $origin,
+                'channel_id' => $channelId,
+                'notification_url' => $notificationUrl,
+                'mcc' => $mcc,
+            ];
+
+            if ($externalStoreIdOption !== null) {
+                $trimmedStoreId = trim((string) $externalStoreIdOption);
+                if ($trimmedStoreId !== '') {
+                    $credentials['external_store_id'] = $trimmedStoreId;
+                } else {
+                    unset($credentials['external_store_id']);
+                }
+            }
+
+            if ($subMerchantIdOption !== null) {
+                $trimmedSubMerchantId = trim((string) $subMerchantIdOption);
+                if ($trimmedSubMerchantId !== '') {
+                    $credentials['sub_merchant_id'] = $trimmedSubMerchantId;
+                } else {
+                    unset($credentials['sub_merchant_id']);
+                }
+            }
+
             MerchantPaymentConfig::query()->updateOrCreate(
                 ['merchant_id' => $merchant->getKey(), 'provider' => 'dana', 'environment' => $environment],
                 [
-                    'partner_id' => (string) $this->ask('X-PARTNER-ID'),
-                    'callback_url' => (string) $this->ask('URL PAY_RETURN HTTPS'),
+                    'partner_id' => $partnerId,
+                    'callback_url' => $callbackUrl,
                     'enabled' => true,
-                    'encrypted_credentials' => [
-                        'merchant_id' => (string) $this->ask('DANA Merchant ID'),
-                        'private_key' => $privateKey,
-                        'dana_webhook_public_key' => $publicKey,
-                        'origin' => (string) $this->ask('ORIGIN'),
-                        'channel_id' => (string) $this->ask('CHANNEL-ID'),
-                        'notification_url' => (string) $this->ask('URL NOTIFICATION HTTPS'),
-                        'mcc' => (string) $this->ask('MCC'),
-                    ],
+                    'encrypted_credentials' => $credentials,
                 ],
             );
         });

@@ -35,14 +35,18 @@ class PaymentService
 
                 $publicId = (string) Str::ulid();
                 $metadata = $attributes['metadata'] ?? null;
-                $isQrisSandbox = is_array($metadata) && ($metadata['udev_sandbox_payment_method'] ?? null) === 'qris';
+                $isQris = (isset($attributes['payment_method']) && $attributes['payment_method'] === 'qris')
+                    || (is_array($metadata) && (
+                        ($metadata['payment_method'] ?? null) === 'qris'
+                        || ($metadata['udev_sandbox_payment_method'] ?? null) === 'qris'
+                    ));
                 $environment = ! empty($attributes['environment']) ? (string) $attributes['environment'] : 'sandbox';
                 $payment = Payment::query()->create([
                     'public_id' => $publicId,
                     // QRIS Create Order membatasi partnerReferenceNo menjadi 25
                     // karakter. Nilai ini dipersisten sebelum request pertama agar
                     // retry idempoten dan webhook/query tetap menunjuk payment sama.
-                    'partner_reference_no' => $isQrisSandbox ? 'Q'.substr(hash('sha256', $publicId), 0, 24) : null,
+                    'partner_reference_no' => $isQris ? 'Q'.substr(hash('sha256', $publicId), 0, 24) : null,
                     'merchant_id' => $merchant->getKey(),
                     'merchant_order_id' => $attributes['merchant_order_id'],
                     'provider' => 'dana',
@@ -115,6 +119,12 @@ class PaymentService
             throw new \LogicException("Konfigurasi DANA {$envLabel} belum tersedia untuk merchant ini.");
         }
 
+        if ($payment->environment !== $config->environment) {
+            $paymentEnv = ucfirst((string) $payment->environment);
+            $configEnv = ucfirst((string) $config->environment);
+            throw new \LogicException("Environment Payment ({$paymentEnv}) tidak cocok dengan konfigurasi DANA merchant ({$configLabel}).");
+        }
+
         if ($this->hasCompleteCheckout($payment)) {
             return $payment;
         }
@@ -160,6 +170,7 @@ class PaymentService
                 'expires_at' => $checkout['expires_at'],
                 'metadata' => [
                     ...(is_array($lockedPayment->metadata) ? $lockedPayment->metadata : []),
+                    'payment_instruction' => $checkout['payment_instruction'],
                     'udev_sandbox_payment_instruction' => $checkout['payment_instruction'],
                 ],
             ]);
@@ -241,9 +252,11 @@ class PaymentService
     private function hasCompleteCheckout(Payment $payment): bool
     {
         $metadata = is_array($payment->metadata) ? $payment->metadata : [];
-        $instruction = is_array($metadata['udev_sandbox_payment_instruction'] ?? null)
-            ? $metadata['udev_sandbox_payment_instruction']
-            : [];
+        $instruction = is_array($metadata['payment_instruction'] ?? null)
+            ? $metadata['payment_instruction']
+            : (is_array($metadata['udev_sandbox_payment_instruction'] ?? null)
+                ? $metadata['udev_sandbox_payment_instruction']
+                : []);
         $paymentCode = $instruction['payment_code'] ?? null;
 
         return $payment->expires_at !== null
@@ -273,7 +286,7 @@ class PaymentService
             return $metadata;
         }
 
-        unset($metadata['udev_sandbox_payment_instruction']);
+        unset($metadata['payment_instruction'], $metadata['udev_sandbox_payment_instruction']);
 
         return $metadata;
     }

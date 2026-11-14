@@ -59,7 +59,7 @@ class DanaSandboxQueryPaymentService
         }
 
         $credentials = $this->credentialResolver->resolve($config);
-        $method = is_array($payment->metadata) ? ($payment->metadata['udev_sandbox_payment_method'] ?? null) : null;
+        $method = is_array($payment->metadata) ? ($payment->metadata['payment_method'] ?? $payment->metadata['udev_sandbox_payment_method'] ?? null) : null;
         if ($method === DanaSandboxPaymentMethod::Qris->value && $credentials->externalStoreId === null) {
             $envLabel = ucfirst((string) $payment->environment);
             throw new \LogicException("QRIS {$envLabel} memerlukan External Store ID pada konfigurasi merchant.");

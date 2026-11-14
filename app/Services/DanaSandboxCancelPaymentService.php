@@ -165,7 +165,7 @@ class DanaSandboxCancelPaymentService
         }
 
         $credentials = $this->credentialResolver->resolve($config);
-        $method = is_array($payment->metadata) ? ($payment->metadata['udev_sandbox_payment_method'] ?? null) : null;
+        $method = is_array($payment->metadata) ? ($payment->metadata['payment_method'] ?? $payment->metadata['udev_sandbox_payment_method'] ?? null) : null;
         if ($method === DanaSandboxPaymentMethod::Qris->value && $credentials->externalStoreId === null) {
             throw new \LogicException('QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.');
         }
