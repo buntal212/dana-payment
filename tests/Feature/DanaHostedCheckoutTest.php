@@ -398,6 +398,88 @@ class DanaHostedCheckoutTest extends TestCase
         $this->assertCount(1, $requests);
     }
 
+    public function test_create_order_production_with_5005401_returns_503_and_records_pending_failed_event(): void
+    {
+        [$merchant, $apiKey] = $this->merchantWithDanaConfig('production');
+        $config = $merchant->paymentConfigs()->where('environment', 'production')->firstOrFail();
+        $credentials = $config->encrypted_credentials;
+        $credentials['external_store_id'] = 'store-prod-001';
+        $config->update(['encrypted_credentials' => $credentials]);
+
+        Http::fake([
+            'https://api.dana.id/*' => Http::response([
+                'responseCode' => '5005401',
+                'responseMessage' => 'Internal Server Error',
+            ], 500, ['X-Request-ID' => 'dana-req-5005401']),
+        ]);
+
+        $response = $this->withToken($apiKey)->postJson('/api/v1/payments', [
+            'merchant_order_id' => 'order-prod-5005401',
+            'amount_minor' => 150_000,
+            'currency' => 'IDR',
+            'environment' => 'production',
+            'metadata' => [
+                'payment_method' => 'qris',
+            ],
+        ], ['Idempotency-Key' => 'idemp-prod-5005401']);
+
+        $response->assertStatus(503);
+        $this->assertDatabaseHas('payments', [
+            'merchant_id' => $merchant->id,
+            'merchant_order_id' => 'order-prod-5005401',
+            'environment' => 'production',
+            'status' => 'pending',
+            'provider_order_id' => null,
+            'checkout_url' => null,
+        ]);
+        $this->assertDatabaseHas('payment_events', [
+            'merchant_id' => $merchant->id,
+            'event_type' => 'payment.checkout_failed',
+            'old_status' => 'pending',
+            'new_status' => 'pending',
+        ]);
+    }
+
+    public function test_api_checkout_returns_409_when_recovery_inquiry_reports_pending_status_01(): void
+    {
+        [$merchant, $apiKey] = $this->merchantWithDanaConfig('production');
+        $payment = Payment::factory()->for($merchant)->create([
+            'merchant_order_id' => 'order-inquiry-01',
+            'environment' => 'production',
+            'provider' => 'dana',
+            'amount_minor' => 150_000,
+            'currency' => 'IDR',
+            'status' => 'pending',
+            'idempotency_key' => 'idemp-inquiry-01',
+            'checkout_url' => null,
+            'expires_at' => null,
+            'metadata' => [],
+        ]);
+
+        Http::fake([
+            'https://api.saas.dana.id/payment-gateway/v1.0/debit/status.htm' => Http::response([
+                'responseCode' => '2005500',
+                'responseMessage' => 'Successful',
+                'latestTransactionStatus' => '01',
+                'requestID' => 'query-req-01',
+            ], 200),
+        ]);
+
+        $response = $this->withToken($apiKey)->postJson('/api/v1/payments', [
+            'merchant_order_id' => 'order-inquiry-01',
+            'amount_minor' => 150_000,
+            'currency' => 'IDR',
+            'environment' => 'production',
+            'metadata' => [],
+        ], ['Idempotency-Key' => 'idemp-inquiry-01']);
+
+        $response->assertStatus(409);
+        $response->assertJsonFragment([
+            'message' => 'DANA melaporkan transaksi sudah terdaftar dengan status 01; pembuatan order baru diblokir.',
+        ]);
+        $this->assertSame('pending', $payment->fresh()->status);
+    }
+
     public function test_partial_checkout_blocks_create_order_when_query_reports_cancelled_status_05(): void
     {
         [$merchant] = $this->merchantWithDanaConfig('production');
@@ -1076,7 +1158,7 @@ class DanaHostedCheckoutTest extends TestCase
                 'mcc' => '5814',
             ],
         ]);
-        $apiKey = app(MerchantApiKeyService::class)->create($merchant, 'dana-test', abilities: ['payments:*']);
+        $apiKey = app(MerchantApiKeyService::class)->create($merchant, 'dana-test', abilities: ['payments:*'], environment: $environment);
 
         return [$merchant, $apiKey['api_key']];
     }

@@ -67,7 +67,12 @@ class PaymentController extends Controller
         } catch (\LogicException $exception) {
             abort(422, 'Konfigurasi checkout merchant belum lengkap.');
         } catch (\RuntimeException $exception) {
-            abort(503, 'Checkout sementara tidak tersedia.');
+            $message = $exception->getMessage() ?: 'Checkout sementara tidak tersedia.';
+            if (str_contains($message, 'transaksi sudah terdaftar') || str_contains($message, 'pembuatan order baru diblokir')) {
+                abort(409, $message);
+            }
+
+            abort(503, $message);
         }
 
         return new PaymentResource($payment);

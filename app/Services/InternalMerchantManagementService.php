@@ -162,7 +162,7 @@ class InternalMerchantManagementService
                 'encrypted_credentials' => [
                     'merchant_id' => $attributes['merchant_id'],
                     'client_id' => $this->optionalCredentialForUpdate($attributes, $existingCredentials, 'client_id'),
-                    'client_secret' => $this->credentialForUpdate($attributes, $existingCredentials, 'client_secret'),
+                    'client_secret' => $this->optionalCredentialForUpdate($attributes, $existingCredentials, 'client_secret'),
                     'private_key' => $privateKey,
                     'dana_webhook_public_key' => $webhookPublicKey,
                     'origin' => $attributes['origin'],

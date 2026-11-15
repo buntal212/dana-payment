@@ -223,6 +223,69 @@ class InternalMerchantDualEnvironmentConfigurationTest extends TestCase
         $freshConfig = $config->fresh();
         $this->assertSame('super-secret-client-token', $freshConfig->encrypted_credentials['client_secret']);
         $this->assertSame('https://live.test/notify-updated', $freshConfig->encrypted_credentials['notification_url']);
+
+        // Explicitly updating client_secret with a new value
+        $newSecretPayload = [
+            'environment' => 'production',
+            'idempotency_key' => 'conf-prod-sec-003',
+            'partner_id' => '200000000002',
+            'merchant_id' => '216620000000000000002',
+            'origin' => 'https://live.test',
+            'channel_id' => 'DANA_ONLINE_PROD',
+            'notification_url' => 'https://live.test/notify-updated',
+            'callback_url' => 'https://live.test/finish',
+            'mcc' => '5411',
+            'enabled' => true,
+            'private_key' => null,
+            'dana_webhook_public_key' => null,
+            'client_secret' => 'brand-new-secret-token',
+        ];
+
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", $newSecretPayload)
+            ->assertOk()
+            ->assertDontSee('brand-new-secret-token');
+
+        $updatedConfig = $config->fresh();
+        $this->assertSame('brand-new-secret-token', $updatedConfig->encrypted_credentials['client_secret']);
+
+        $this->withToken(self::ServiceToken)
+            ->getJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration?environment=production")
+            ->assertOk()
+            ->assertJsonPath('data.configuration.client_secret_configured', true)
+            ->assertJsonMissingPath('data.configuration.client_secret')
+            ->assertDontSee('brand-new-secret-token');
+
+        // Clearing client_secret explicitly with clear_client_secret
+        $clearSecretPayload = [
+            'environment' => 'production',
+            'idempotency_key' => 'conf-prod-sec-004',
+            'partner_id' => '200000000002',
+            'merchant_id' => '216620000000000000002',
+            'origin' => 'https://live.test',
+            'channel_id' => 'DANA_ONLINE_PROD',
+            'notification_url' => 'https://live.test/notify-updated',
+            'callback_url' => 'https://live.test/finish',
+            'mcc' => '5411',
+            'enabled' => true,
+            'private_key' => null,
+            'dana_webhook_public_key' => null,
+            'client_secret' => null,
+            'clear_client_secret' => true,
+        ];
+
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", $clearSecretPayload)
+            ->assertOk();
+
+        $clearedConfig = $config->fresh();
+        $this->assertNull($clearedConfig->encrypted_credentials['client_secret'] ?? null);
+
+        $this->withToken(self::ServiceToken)
+            ->getJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration?environment=production")
+            ->assertOk()
+            ->assertJsonPath('data.configuration.client_secret_configured', false)
+            ->assertJsonMissingPath('data.configuration.client_secret');
     }
 
     public function test_production_webhook_public_key_update_preserves_private_key_client_secret_store_id_and_sandbox_isolation(): void
