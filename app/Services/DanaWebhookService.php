@@ -17,11 +17,16 @@ use RuntimeException;
 
 class DanaWebhookService
 {
+    private BillingWebhookForwarder $billingForwarder;
+
     public function __construct(
         private DanaCredentialResolver $credentialResolver,
         private DanaSnapSignatureService $signatureService,
         private DanaAmountFormatter $amountFormatter,
-    ) {}
+        ?BillingWebhookForwarder $billingForwarder = null,
+    ) {
+        $this->billingForwarder = $billingForwarder ?? app(BillingWebhookForwarder::class);
+    }
 
     /** @param array<string, string|null> $headers */
     public function process(string $rawBody, array $headers): void
@@ -233,9 +238,21 @@ class DanaWebhookService
                     'source' => 'provider',
                     'safe_details' => ['provider' => 'dana', 'provider_order_id' => $providerReference],
                 ]);
+
+                // Antrekan pengiriman event terverifikasi ke UDEV Billing (outbox persisten + afterCommit)
+                $this->billingForwarder->queueForwarding($lockedPayment, $targetStatus);
             }
 
             $webhook->update(['processing_status' => 'processed', 'attempts' => 1, 'processed_at' => now()]);
+
+            Log::info('Webhook DANA SNAP berhasil diproses.', [
+                'payment_id' => $lockedPayment->getKey(),
+                'merchant_id' => $lockedPayment->merchant_id,
+                'environment' => $lockedPayment->environment,
+                'target_status' => $targetStatus,
+                'provider_reference' => $providerReference,
+                'payload_sha256' => $payloadHash,
+            ]);
 
             return true;
         });

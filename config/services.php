@@ -66,4 +66,13 @@ return [
         'api_key_issuance_pending_ttl_minutes' => (int) env('UDEV_INTERNAL_API_KEY_ISSUANCE_PENDING_TTL_MINUTES', 10),
     ],
 
+    'udev_billing' => [
+        'webhook_url' => env('UDEV_BILLING_WEBHOOK_URL', env('UDEV_BILLING_BASE_URL') ? rtrim((string) env('UDEV_BILLING_BASE_URL'), '/').'/api/v1/payment-gateways/dana/webhook' : 'http://127.0.0.1:8000/api/v1/payment-gateways/dana/webhook'),
+        'webhook_secret' => env('UDEV_BILLING_WEBHOOK_SECRET', env('DANA_GATEWAY_WEBHOOK_SECRET', env('UDEV_INTERNAL_SERVICE_TOKEN'))),
+        'timeout' => (int) env('UDEV_BILLING_WEBHOOK_TIMEOUT', 10),
+        'connect_timeout' => (int) env('UDEV_BILLING_WEBHOOK_CONNECT_TIMEOUT', 3),
+        'max_attempts' => (int) env('UDEV_BILLING_WEBHOOK_MAX_ATTEMPTS', 5),
+        'retry_backoff_seconds' => (int) env('UDEV_BILLING_WEBHOOK_RETRY_BACKOFF_SECONDS', 15),
+    ],
+
 ];

@@ -122,7 +122,7 @@ class PaymentService
         if ($payment->environment !== $config->environment) {
             $paymentEnv = ucfirst((string) $payment->environment);
             $configEnv = ucfirst((string) $config->environment);
-            throw new \LogicException("Environment Payment ({$paymentEnv}) tidak cocok dengan konfigurasi DANA merchant ({$configLabel}).");
+            throw new \LogicException("Environment Payment ({$paymentEnv}) tidak cocok dengan konfigurasi DANA merchant ({$configEnv}).");
         }
 
         if ($this->hasCompleteCheckout($payment)) {
