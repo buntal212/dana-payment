@@ -406,6 +406,117 @@ class DanaQrisIntegrationTest extends TestCase
         $this->assertSame('paid', $legacyPayment->fresh()->status);
     }
 
+    public function test_end_to_end_qris_production_gateway_order_creation_inquiry_and_finish_notify(): void
+    {
+        $merchant = Merchant::factory()->create(['code' => 'MRC-QRIS-E2E-PROD']);
+        $config = $this->createMerchantConfig($merchant, 'production', 'PROD-STORE-E2E');
+
+        $paymentService = app(PaymentService::class);
+        $gateway = app(DanaPaymentGateway::class);
+        $queryService = app(\App\Services\DanaSandboxQueryPaymentService::class);
+        $webhookService = app(\App\Services\DanaWebhookService::class);
+
+        $orderId = 'INV-20261115-E2EPROD-A1'; // 24 chars (<= 25)
+        $idempotencyKey = 'idemp-qris-e2e-prod-001';
+
+        $capturedCreateRequest = null;
+        $capturedQueryRequest = null;
+
+        Http::fake([
+            'https://api.dana.id/payment-gateway/v1.0/debit/payment-host-to-host.htm' => function (HttpRequest $request) use (&$capturedCreateRequest): array {
+                $capturedCreateRequest = $request;
+
+                return [
+                    'responseCode' => '2005400',
+                    'referenceNo' => 'DANA-PROD-REF-E2E-099',
+                    'additionalInfo' => [
+                        'qrContent' => self::EmvcoQrisSample,
+                    ],
+                ];
+            },
+            'https://api.saas.dana.id/payment-gateway/v1.0/debit/status.htm' => function (HttpRequest $request) use (&$capturedQueryRequest): array {
+                $capturedQueryRequest = $request;
+
+                return [
+                    'responseCode' => '2005500',
+                    'referenceNo' => 'DANA-PROD-REF-E2E-099',
+                    'latestTransactionStatus' => '01',
+                    'additionalInfo' => [
+                        'qrContent' => self::EmvcoQrisSample,
+                    ],
+                ];
+            },
+        ]);
+
+        // 1. Create Order QRIS Production
+        $payment = $paymentService->createHostedCheckout($merchant, [
+            'merchant_order_id' => $orderId,
+            'amount_minor' => 200_000,
+            'currency' => 'IDR',
+            'idempotency_key' => $idempotencyKey,
+            'environment' => 'production',
+            'payment_method' => 'qris',
+        ], $gateway);
+
+        // Verify DANA Create Order request contract
+        $this->assertNotNull($capturedCreateRequest);
+        $createBody = $capturedCreateRequest->data();
+        $this->assertSame(25, strlen($createBody['partnerReferenceNo']));
+        $this->assertSame($payment->partner_reference_no, $createBody['partnerReferenceNo']);
+        $this->assertSame('PROD-STORE-E2E', $createBody['externalStoreId']);
+        $this->assertSame('NETWORK_PAY', $createBody['payOptionDetails'][0]['payMethod']);
+        $this->assertSame('NETWORK_PAY_PG_QRIS', $createBody['payOptionDetails'][0]['payOption']);
+        $this->assertSame('Payment '.$orderId, $createBody['additionalInfo']['order']['orderTitle']);
+        $this->assertStringNotContainsString('Sandbox', $createBody['additionalInfo']['order']['orderTitle']);
+
+        // Verify local payment record
+        $this->assertSame('pending', $payment->status);
+        $this->assertSame('qris_mpm', $payment->metadata['payment_instruction']['type']);
+        $this->assertSame(self::EmvcoQrisSample, $payment->metadata['payment_instruction']['qr_content']);
+
+        // 2. Retry with same Idempotency-Key returns existing payment without duplicate DANA request
+        $retryPayment = $paymentService->createHostedCheckout($merchant, [
+            'merchant_order_id' => $orderId,
+            'amount_minor' => 200_000,
+            'currency' => 'IDR',
+            'idempotency_key' => $idempotencyKey,
+            'environment' => 'production',
+            'payment_method' => 'qris',
+        ], $gateway);
+
+        $this->assertSame($payment->id, $retryPayment->id);
+        $this->assertSame($payment->partner_reference_no, $retryPayment->partner_reference_no);
+
+        // 3. Status Inquiry uses the exact same 25-char partner_reference_no
+        $queryResult = $queryService->query($payment, $config);
+        $this->assertNotNull($capturedQueryRequest);
+        $queryBody = $capturedQueryRequest->data();
+        $this->assertSame($payment->partner_reference_no, $queryBody['originalPartnerReferenceNo']);
+        $this->assertSame('01', $queryResult['latest_transaction_status']);
+        // Query must NOT change status to paid
+        $this->assertSame('pending', $payment->fresh()->status);
+
+        // 4. Finish Notify Webhook from DANA
+        $webhookPayload = [
+            'originalPartnerReferenceNo' => $payment->partner_reference_no,
+            'originalReferenceNo' => 'DANA-PROD-REF-E2E-099',
+            'latestTransactionStatus' => '00',
+            'merchantId' => 'MERCHANT-production-001',
+            'amount' => ['value' => '200000.00', 'currency' => 'IDR'],
+        ];
+
+        $webhookService->process(json_encode($webhookPayload), [
+            'x-timestamp' => now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP'),
+            'x-signature' => 'valid-signature',
+            'x-partner-id' => $config->partner_id,
+            'x-external-id' => $payment->public_id,
+        ]);
+
+        $freshPayment = $payment->fresh();
+        $this->assertSame('paid', $freshPayment->status);
+        $this->assertNotNull($freshPayment->paid_at);
+    }
+
     private function createMerchantConfig(Merchant $merchant, string $environment, ?string $externalStoreId): MerchantPaymentConfig
     {
         $credentials = [

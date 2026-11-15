@@ -284,7 +284,23 @@ class PaymentService
             // request awal. Nilai internal itu bukan bagian payload merchant
             // sehingga tidak boleh membuat retry dengan Idempotency-Key sama
             // berubah menjadi konflik.
-            && $this->canonicalize($this->requestMetadata($payment->metadata)) === $this->canonicalize($attributes['metadata'] ?? null);
+            && $this->canonicalize($this->requestMetadata($payment->metadata)) === $this->canonicalize($this->requestAttributesMetadata($attributes));
+    }
+
+    /** @param array<string, mixed> $attributes */
+    private function requestAttributesMetadata(array $attributes): mixed
+    {
+        $metadata = $attributes['metadata'] ?? null;
+        if (isset($attributes['payment_method'])) {
+            if (! is_array($metadata)) {
+                $metadata = [];
+            }
+            if (! isset($metadata['payment_method'])) {
+                $metadata['payment_method'] = $attributes['payment_method'];
+            }
+        }
+
+        return $this->requestMetadata($metadata);
     }
 
     private function requestMetadata(mixed $metadata): mixed
