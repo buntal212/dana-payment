@@ -449,18 +449,26 @@ class InternalMerchantManagementService
      */
     private function credentialForUpdate(array $attributes, array $existingCredentials, string $field): ?string
     {
-        $value = $attributes[$field] ?? $existingCredentials[$field] ?? null;
+        $raw = $attributes[$field] ?? null;
+        if (is_string($raw) && trim($raw) !== '') {
+            return trim($raw);
+        }
 
-        return is_string($value) && trim($value) !== '' ? $value : null;
+        $existing = $existingCredentials[$field] ?? null;
+
+        return is_string($existing) && trim($existing) !== '' ? trim($existing) : null;
     }
 
     /** @param array<string, mixed> $attributes @param array<string, mixed> $existingCredentials */
     private function optionalCredentialForUpdate(array $attributes, array $existingCredentials, string $field): ?string
     {
-        if (array_key_exists($field, $attributes)) {
-            $value = $attributes[$field];
+        if (! empty($attributes["clear_{$field}"])) {
+            return null;
+        }
 
-            return is_string($value) && trim($value) !== '' ? $value : null;
+        $raw = $attributes[$field] ?? null;
+        if (is_string($raw) && trim($raw) !== '') {
+            return trim($raw);
         }
 
         return $this->credentialForUpdate($attributes, $existingCredentials, $field);
