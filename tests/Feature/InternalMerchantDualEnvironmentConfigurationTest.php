@@ -511,4 +511,356 @@ PEM;
             ->assertStatus(Response::HTTP_UNPROCESSABLE_ENTITY)
             ->assertJsonPath('message', 'Format PEM bukan public key SPKI atau PKCS#1 yang didukung.');
     }
+
+    public function test_get_stored_dana_configuration_returns_all_ten_non_secret_fields_and_no_plaintext_secrets(): void
+    {
+        $provisionResp = $this->withToken(self::ServiceToken)
+            ->postJson('/api/v1/internal/merchants', [
+                'code' => 'MRC-STORED-001',
+                'name' => 'Toko Stored Config Test',
+                'email' => 'stored@test.com',
+                'idempotency_key' => 'idemp-stored-001',
+            ])
+            ->assertStatus(Response::HTTP_CREATED);
+
+        $merchantId = $provisionResp->json('data.merchant_id');
+
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'production',
+                'idempotency_key' => 'conf-stored-001',
+                'partner_id' => 'prod-partner-100',
+                'client_id' => 'prod-client-100',
+                'client_secret' => 'super-secret-client-value',
+                'merchant_id' => 'prod-mid-100',
+                'origin' => 'https://prod.stored.test',
+                'channel_id' => 'PROD_STORED_CH',
+                'external_store_id' => 'EXT-STORE-100',
+                'sub_merchant_id' => 'SUB-MERC-100',
+                'notification_url' => 'https://prod.stored.test/notify',
+                'callback_url' => 'https://prod.stored.test/finish',
+                'mcc' => '5411',
+                'enabled' => true,
+                'private_key' => DanaSandboxKeyMaterialFixture::PrivateKey,
+                'dana_webhook_public_key' => DanaSandboxKeyMaterialFixture::PublicKey,
+            ])
+            ->assertOk();
+
+        $response = $this->withToken(self::ServiceToken)
+            ->getJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration?environment=production")
+            ->assertOk()
+            ->assertJsonPath('data.merchant_code', 'MRC-STORED-001')
+            ->assertJsonPath('data.environment', 'production')
+            ->assertJsonPath('data.configuration_exists', true)
+            ->assertJsonPath('data.configuration.partner_id', 'prod-partner-100')
+            ->assertJsonPath('data.configuration.client_id', 'prod-client-100')
+            ->assertJsonPath('data.configuration.merchant_id', 'prod-mid-100')
+            ->assertJsonPath('data.configuration.origin', 'https://prod.stored.test')
+            ->assertJsonPath('data.configuration.channel_id', 'PROD_STORED_CH')
+            ->assertJsonPath('data.configuration.external_store_id', 'EXT-STORE-100')
+            ->assertJsonPath('data.configuration.sub_merchant_id', 'SUB-MERC-100')
+            ->assertJsonPath('data.configuration.notification_url', 'https://prod.stored.test/notify')
+            ->assertJsonPath('data.configuration.callback_url', 'https://prod.stored.test/finish')
+            ->assertJsonPath('data.configuration.mcc', '5411')
+            ->assertJsonPath('data.configuration.enabled', true)
+            ->assertJsonPath('data.configuration.private_key_configured', true)
+            ->assertJsonPath('data.configuration.dana_webhook_public_key_configured', true)
+            ->assertJsonPath('data.configuration.client_secret_configured', true)
+            ->assertJsonMissingPath('data.configuration.client_secret')
+            ->assertJsonMissingPath('data.configuration.private_key')
+            ->assertJsonMissingPath('data.configuration.dana_webhook_public_key');
+
+        $content = (string) $response->getContent();
+        $this->assertStringNotContainsString('super-secret-client-value', $content);
+        $this->assertStringNotContainsString(DanaSandboxKeyMaterialFixture::PrivateKey, $content);
+    }
+
+    public function test_update_configuration_retains_existing_secrets_when_not_provided(): void
+    {
+        $provisionResp = $this->withToken(self::ServiceToken)
+            ->postJson('/api/v1/internal/merchants', [
+                'code' => 'MRC-RETAIN-001',
+                'name' => 'Toko Retain Test',
+                'email' => 'retain@test.com',
+                'idempotency_key' => 'idemp-retain-001',
+            ])
+            ->assertStatus(Response::HTTP_CREATED);
+
+        $merchantId = $provisionResp->json('data.merchant_id');
+
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'production',
+                'idempotency_key' => 'conf-retain-001',
+                'partner_id' => 'prod-partner-200',
+                'client_secret' => 'initial-secret-123',
+                'merchant_id' => 'prod-mid-200',
+                'origin' => 'https://prod.retain.test',
+                'channel_id' => 'OLD_CHANNEL',
+                'notification_url' => 'https://prod.retain.test/notify',
+                'callback_url' => 'https://prod.retain.test/finish',
+                'mcc' => '5411',
+                'enabled' => true,
+                'private_key' => DanaSandboxKeyMaterialFixture::PrivateKey,
+                'dana_webhook_public_key' => DanaSandboxKeyMaterialFixture::PublicKey,
+            ])
+            ->assertOk();
+
+        // Update without providing any secrets (simulate saving unchanged secrets from UI)
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'production',
+                'idempotency_key' => 'conf-retain-002',
+                'partner_id' => 'prod-partner-200',
+                'merchant_id' => 'prod-mid-200',
+                'origin' => 'https://prod.retain.test',
+                'channel_id' => 'NEW_CHANNEL',
+                'notification_url' => 'https://prod.retain.test/notify-updated',
+                'callback_url' => 'https://prod.retain.test/finish',
+                'mcc' => '5411',
+                'enabled' => true,
+            ])
+            ->assertOk();
+
+        $config = MerchantPaymentConfig::query()
+            ->where('merchant_id', $merchantId)
+            ->where('environment', 'production')
+            ->firstOrFail();
+
+        $creds = $config->encrypted_credentials;
+        $this->assertSame('NEW_CHANNEL', $creds['channel_id']);
+        $this->assertSame('https://prod.retain.test/notify-updated', $creds['notification_url']);
+        $this->assertSame('initial-secret-123', $creds['client_secret']);
+        $this->assertNotEmpty($creds['private_key']);
+        $this->assertNotEmpty($creds['dana_webhook_public_key']);
+    }
+
+    public function test_update_configuration_replaces_secrets_and_encrypts_them(): void
+    {
+        $provisionResp = $this->withToken(self::ServiceToken)
+            ->postJson('/api/v1/internal/merchants', [
+                'code' => 'MRC-REPLACE-001',
+                'name' => 'Toko Replace Test',
+                'email' => 'replace@test.com',
+                'idempotency_key' => 'idemp-replace-001',
+            ])
+            ->assertStatus(Response::HTTP_CREATED);
+
+        $merchantId = $provisionResp->json('data.merchant_id');
+
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'production',
+                'idempotency_key' => 'conf-replace-001',
+                'partner_id' => 'prod-partner-300',
+                'client_secret' => 'old-secret-123',
+                'merchant_id' => 'prod-mid-300',
+                'origin' => 'https://prod.replace.test',
+                'channel_id' => 'CHANNEL_1',
+                'notification_url' => 'https://prod.replace.test/notify',
+                'callback_url' => 'https://prod.replace.test/finish',
+                'mcc' => '5411',
+                'enabled' => true,
+                'private_key' => DanaSandboxKeyMaterialFixture::PrivateKey,
+                'dana_webhook_public_key' => DanaSandboxKeyMaterialFixture::PublicKey,
+            ])
+            ->assertOk();
+
+        // Update with replaced secret
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'production',
+                'idempotency_key' => 'conf-replace-002',
+                'partner_id' => 'prod-partner-300',
+                'client_secret' => 'new-super-secret-456',
+                'merchant_id' => 'prod-mid-300',
+                'origin' => 'https://prod.replace.test',
+                'channel_id' => 'CHANNEL_1',
+                'notification_url' => 'https://prod.replace.test/notify',
+                'callback_url' => 'https://prod.replace.test/finish',
+                'mcc' => '5411',
+                'enabled' => true,
+            ])
+            ->assertOk();
+
+        $config = MerchantPaymentConfig::query()
+            ->where('merchant_id', $merchantId)
+            ->where('environment', 'production')
+            ->firstOrFail();
+
+        $this->assertSame('new-super-secret-456', $config->encrypted_credentials['client_secret']);
+        $this->assertNotEmpty($config->encrypted_credentials['private_key']);
+    }
+
+    public function test_update_configuration_clears_secrets_when_explicitly_flagged(): void
+    {
+        $provisionResp = $this->withToken(self::ServiceToken)
+            ->postJson('/api/v1/internal/merchants', [
+                'code' => 'MRC-CLEAR-001',
+                'name' => 'Toko Clear Test',
+                'email' => 'clear@test.com',
+                'idempotency_key' => 'idemp-clear-001',
+            ])
+            ->assertStatus(Response::HTTP_CREATED);
+
+        $merchantId = $provisionResp->json('data.merchant_id');
+
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'production',
+                'idempotency_key' => 'conf-clear-001',
+                'partner_id' => 'prod-partner-500',
+                'client_secret' => 'to-be-deleted-secret',
+                'merchant_id' => 'prod-mid-500',
+                'origin' => 'https://prod.clear.test',
+                'channel_id' => 'CHANNEL_5',
+                'notification_url' => 'https://prod.clear.test/notify',
+                'callback_url' => 'https://prod.clear.test/finish',
+                'mcc' => '5411',
+                'enabled' => true,
+                'private_key' => DanaSandboxKeyMaterialFixture::PrivateKey,
+                'dana_webhook_public_key' => DanaSandboxKeyMaterialFixture::PublicKey,
+            ])
+            ->assertOk();
+
+        // Clear client secret explicitly while keeping configuration enabled
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'production',
+                'idempotency_key' => 'conf-clear-002',
+                'partner_id' => 'prod-partner-500',
+                'merchant_id' => 'prod-mid-500',
+                'origin' => 'https://prod.clear.test',
+                'channel_id' => 'CHANNEL_5',
+                'notification_url' => 'https://prod.clear.test/notify',
+                'callback_url' => 'https://prod.clear.test/finish',
+                'mcc' => '5411',
+                'enabled' => true,
+                'clear_client_secret' => true,
+            ])
+            ->assertOk();
+
+        $config = MerchantPaymentConfig::query()
+            ->where('merchant_id', $merchantId)
+            ->where('environment', 'production')
+            ->firstOrFail();
+
+        $this->assertNull($config->encrypted_credentials['client_secret']);
+        $this->assertNotNull($config->encrypted_credentials['private_key']);
+
+        // Attempting to clear required private_key while enabled => true fails with 422
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'production',
+                'idempotency_key' => 'conf-clear-003',
+                'partner_id' => 'prod-partner-500',
+                'merchant_id' => 'prod-mid-500',
+                'origin' => 'https://prod.clear.test',
+                'channel_id' => 'CHANNEL_5',
+                'notification_url' => 'https://prod.clear.test/notify',
+                'callback_url' => 'https://prod.clear.test/finish',
+                'mcc' => '5411',
+                'enabled' => true,
+                'clear_private_key' => true,
+            ])
+            ->assertStatus(Response::HTTP_UNPROCESSABLE_ENTITY)
+            ->assertJsonPath('message', 'Private key dan DANA webhook public key wajib tersedia sebelum konfigurasi diaktifkan.');
+
+        // Disabling configuration allows clearing keys
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'production',
+                'idempotency_key' => 'conf-clear-004',
+                'partner_id' => 'prod-partner-500',
+                'merchant_id' => 'prod-mid-500',
+                'origin' => 'https://prod.clear.test',
+                'channel_id' => 'CHANNEL_5',
+                'notification_url' => 'https://prod.clear.test/notify',
+                'callback_url' => 'https://prod.clear.test/finish',
+                'mcc' => '5411',
+                'enabled' => false,
+                'clear_private_key' => true,
+                'clear_dana_webhook_public_key' => true,
+            ])
+            ->assertOk();
+
+        $config->refresh();
+        $this->assertFalse($config->enabled);
+        $this->assertNull($config->encrypted_credentials['private_key']);
+        $this->assertNull($config->encrypted_credentials['dana_webhook_public_key']);
+    }
+
+    public function test_stored_configuration_isolates_environments(): void
+    {
+        $provisionResp = $this->withToken(self::ServiceToken)
+            ->postJson('/api/v1/internal/merchants', [
+                'code' => 'MRC-ISO-001',
+                'name' => 'Toko Isolation Test',
+                'email' => 'iso@test.com',
+                'idempotency_key' => 'idemp-iso-001',
+            ])
+            ->assertStatus(Response::HTTP_CREATED);
+
+        $merchantId = $provisionResp->json('data.merchant_id');
+
+        // Configure Sandbox
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'sandbox',
+                'idempotency_key' => 'conf-iso-sbx',
+                'partner_id' => 'sbx-partner-99',
+                'client_id' => 'sbx-client-99',
+                'client_secret' => 'sbx-secret-99',
+                'merchant_id' => 'sbx-mid-99',
+                'origin' => 'https://sandbox.iso.test',
+                'channel_id' => 'SBX_CHANNEL',
+                'notification_url' => 'https://sandbox.iso.test/notify',
+                'callback_url' => 'https://sandbox.iso.test/finish',
+                'mcc' => '5411',
+                'enabled' => true,
+                'private_key' => DanaSandboxKeyMaterialFixture::PrivateKey,
+                'dana_webhook_public_key' => DanaSandboxKeyMaterialFixture::PublicKey,
+            ])
+            ->assertOk();
+
+        // Configure Production
+        $this->withToken(self::ServiceToken)
+            ->putJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration", [
+                'environment' => 'production',
+                'idempotency_key' => 'conf-iso-prd',
+                'partner_id' => 'prd-partner-88',
+                'client_id' => 'prd-client-88',
+                'client_secret' => 'prd-secret-88',
+                'merchant_id' => 'prd-mid-88',
+                'origin' => 'https://prod.iso.test',
+                'channel_id' => 'PRD_CHANNEL',
+                'notification_url' => 'https://prod.iso.test/notify',
+                'callback_url' => 'https://prod.iso.test/finish',
+                'mcc' => '5411',
+                'enabled' => true,
+                'private_key' => DanaSandboxKeyMaterialFixture::PrivateKey,
+                'dana_webhook_public_key' => DanaSandboxKeyMaterialFixture::PublicKey,
+            ])
+            ->assertOk();
+
+        // Query Sandbox stored configuration
+        $this->withToken(self::ServiceToken)
+            ->getJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration?environment=sandbox")
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'sandbox')
+            ->assertJsonPath('data.configuration.partner_id', 'sbx-partner-99')
+            ->assertJsonPath('data.configuration.client_id', 'sbx-client-99')
+            ->assertJsonPath('data.configuration.channel_id', 'SBX_CHANNEL')
+            ->assertJsonPath('data.configuration.origin', 'https://sandbox.iso.test');
+
+        // Query Production stored configuration
+        $this->withToken(self::ServiceToken)
+            ->getJson("/api/v1/internal/merchants/{$merchantId}/dana-configuration?environment=production")
+            ->assertOk()
+            ->assertJsonPath('data.environment', 'production')
+            ->assertJsonPath('data.configuration.partner_id', 'prd-partner-88')
+            ->assertJsonPath('data.configuration.client_id', 'prd-client-88')
+            ->assertJsonPath('data.configuration.channel_id', 'PRD_CHANNEL')
+            ->assertJsonPath('data.configuration.origin', 'https://prod.iso.test');
+    }
 }

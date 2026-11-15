@@ -149,9 +149,15 @@ class InternalMerchantManagementService
             }
 
             $existingCredentials = is_array($config->encrypted_credentials) ? $config->encrypted_credentials : [];
-            $privateKey = $this->credentialForUpdate($attributes, $existingCredentials, 'private_key');
-            $webhookPublicKey = $this->credentialForUpdate($attributes, $existingCredentials, 'dana_webhook_public_key');
-            if ($privateKey === null || $webhookPublicKey === null) {
+            $privateKey = $this->optionalCredentialForUpdate($attributes, $existingCredentials, 'private_key');
+            $webhookPublicKey = $this->optionalCredentialForUpdate($attributes, $existingCredentials, 'dana_webhook_public_key');
+            $clientSecret = $this->optionalCredentialForUpdate($attributes, $existingCredentials, 'client_secret');
+
+            if (! empty($attributes['enabled']) && ($privateKey === null || $webhookPublicKey === null)) {
+                throw new UnprocessableEntityHttpException('Private key dan DANA webhook public key wajib tersedia sebelum konfigurasi diaktifkan.');
+            }
+
+            if (! $config->exists && ($privateKey === null || $webhookPublicKey === null)) {
                 throw new UnprocessableEntityHttpException('Private key dan DANA webhook public key wajib tersedia sebelum konfigurasi disimpan.');
             }
 
