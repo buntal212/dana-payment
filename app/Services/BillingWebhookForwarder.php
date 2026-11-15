@@ -43,6 +43,9 @@ class BillingWebhookForwarder
             'merchant_order_id' => $payment->merchant_order_id,
             'id' => $payment->public_id,
             'originalReferenceNo' => $payment->public_id,
+            'partner_reference_no' => $payment->partner_reference_no,
+            'originalPartnerReferenceNo' => $payment->partner_reference_no ?? $payment->public_id,
+            'partnerReferenceNo' => $payment->partner_reference_no ?? $payment->public_id,
             'provider_order_id' => $payment->provider_order_id,
             'status' => $targetStatus,
             'latestTransactionStatus' => match ($targetStatus) {

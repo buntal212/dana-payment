@@ -24,9 +24,36 @@ class DanaQrisIntegrationTest extends TestCase
     {
         parent::setUp();
 
-        $signatureMock = $this->createMock(DanaSnapSignatureService::class);
-        $signatureMock->method('signTransactional')->willReturn('mocked-snap-signature');
-        $this->app->instance(DanaSnapSignatureService::class, $signatureMock);
+        $this->app->instance(DanaSnapSignatureService::class, new class extends DanaSnapSignatureService {
+            public function signTransactional(string $httpMethod, string $endpointUrl, string $requestPayload, string $timestamp, string $privateKey): string
+            {
+                return 'mocked-snap-signature';
+            }
+
+            public function transactionalVerificationDiagnostics(
+                string $method,
+                string $relativePath,
+                string $jsonBody,
+                string $timestamp,
+                string $signature,
+                string $publicKey,
+                array $candidatePaths = [],
+                ?string $fallbackPublicKey = null,
+            ): array {
+                return [
+                    'signature_valid' => true,
+                    'signature_base64_valid' => true,
+                    'signature_decoded_bytes' => 256,
+                    'public_key_valid' => true,
+                    'public_key_bits' => 2048,
+                    'public_key_sha256' => 'mocked',
+                    'public_key_is_rsa' => true,
+                    'string_to_sign_sha256' => 'mocked',
+                    'openssl_verify_result' => 1,
+                    'openssl_verification_completed' => true,
+                ];
+            }
+        });
     }
 
     public function test_qris_production_creates_order_without_sandbox_label_and_with_valid_pay_option(): void
@@ -249,6 +276,134 @@ class DanaQrisIntegrationTest extends TestCase
         $this->expectExceptionMessage('QRIS Sandbox memerlukan External Store ID pada konfigurasi merchant.');
 
         app(DanaPaymentGateway::class)->startCheckout($payment, $config);
+    }
+
+    public function test_qris_checkout_with_null_partner_reference_generates_25_char_reference_and_persists_for_idempotent_retry(): void
+    {
+        $merchant = Merchant::factory()->create(['code' => 'MRC-QRIS-LEGACY-NULL']);
+        $config = $this->createMerchantConfig($merchant, 'production', 'PROD-STORE-NULL-REF');
+
+        // Simulate existing payment where partner_reference_no is null (e.g., Payment #98)
+        $payment = Payment::factory()->for($merchant)->create([
+            'environment' => 'production',
+            'public_id' => '01JCN5N7X8VTR8W8X8W8X8W8X8', // 26 chars ULID
+            'partner_reference_no' => null,
+            'merchant_order_id' => 'INV-20261115-CTDP60KWY7-A1', // 26 chars
+            'amount_minor' => 100_000,
+            'currency' => 'IDR',
+            'status' => 'pending',
+            'metadata' => ['payment_method' => 'qris'],
+        ]);
+
+        $capturedRequests = [];
+        Http::fake(function (HttpRequest $request) use (&$capturedRequests): array {
+            $capturedRequests[] = $request;
+
+            return [
+                'responseCode' => '2005400',
+                'referenceNo' => 'DANA-REF-NULL-RECOVERED',
+                'additionalInfo' => [
+                    'qrContent' => self::EmvcoQrisSample,
+                ],
+            ];
+        });
+
+        $gateway = app(DanaPaymentGateway::class);
+
+        // First attempt: gateway must generate a deterministic 25-char reference and persist it quietly
+        $result = $gateway->startCheckout($payment, $config);
+
+        $this->assertCount(1, $capturedRequests);
+        $firstPartnerRef = $capturedRequests[0]->data()['partnerReferenceNo'];
+        $this->assertSame(25, strlen($firstPartnerRef));
+        $this->assertLessThanOrEqual(25, strlen($firstPartnerRef));
+        $this->assertMatchesRegularExpression('/\AQ[A-Fa-f0-9]{24}\z/', $firstPartnerRef);
+
+        // Verify the generated reference is saved in the database
+        $freshPayment = $payment->fresh();
+        $this->assertSame($firstPartnerRef, $freshPayment->partner_reference_no);
+
+        // Second attempt (retry): must reuse the exact same partnerReferenceNo for idempotency
+        $resultRetry = $gateway->startCheckout($freshPayment, $config);
+        $this->assertCount(2, $capturedRequests);
+        $secondPartnerRef = $capturedRequests[1]->data()['partnerReferenceNo'];
+        $this->assertSame($firstPartnerRef, $secondPartnerRef);
+    }
+
+    public function test_qris_creation_with_overlong_reference_normalizes_to_25_chars(): void
+    {
+        $merchant = Merchant::factory()->create(['code' => 'MRC-QRIS-OVERLONG']);
+        $config = $this->createMerchantConfig($merchant, 'production', 'PROD-STORE-OVERLONG');
+
+        $paymentService = app(PaymentService::class);
+        $gateway = app(DanaPaymentGateway::class);
+
+        $capturedRequest = null;
+        Http::fake(function (HttpRequest $request) use (&$capturedRequest): array {
+            $capturedRequest = $request;
+
+            return [
+                'responseCode' => '2005400',
+                'referenceNo' => 'DANA-REF-NORM-001',
+                'additionalInfo' => [
+                    'qrContent' => self::EmvcoQrisSample,
+                ],
+            ];
+        });
+
+        // 26-character partner reference provided explicitly
+        $payment = $paymentService->createHostedCheckout($merchant, [
+            'merchant_order_id' => 'INV-20261115-CTDP60KWY7-A1',
+            'partner_reference_no' => 'INV-20261115-CTDP60KWY7-A1', // 26 chars
+            'amount_minor' => 75_000,
+            'currency' => 'IDR',
+            'idempotency_key' => 'idemp-overlong-001',
+            'environment' => 'production',
+            'payment_method' => 'qris',
+        ], $gateway);
+
+        $this->assertNotNull($capturedRequest);
+        $actualPartnerRef = $capturedRequest->data()['partnerReferenceNo'];
+
+        $this->assertSame(25, strlen($actualPartnerRef));
+        $this->assertLessThanOrEqual(25, strlen($actualPartnerRef));
+        $this->assertMatchesRegularExpression('/\AQ[A-Fa-f0-9]{24}\z/', $actualPartnerRef);
+        $this->assertSame($payment->partner_reference_no, $actualPartnerRef);
+    }
+
+    public function test_legacy_26_character_reference_still_supported_for_finish_notify_webhook(): void
+    {
+        $merchant = Merchant::factory()->create(['code' => 'MRC-LEGACY-NOTIFY']);
+        $config = $this->createMerchantConfig($merchant, 'production', null);
+
+        // Existing payment with 26-character public_id
+        $legacyPayment = Payment::factory()->for($merchant)->create([
+            'environment' => 'production',
+            'public_id' => '01JCN5N7X8VTR8W8X8W8X8W8X8',
+            'partner_reference_no' => null,
+            'merchant_order_id' => 'INV-20261115-CTDP60KWY7-A1',
+            'amount_minor' => 50_000,
+            'currency' => 'IDR',
+            'status' => 'pending',
+        ]);
+
+        $webhookPayload = [
+            'originalPartnerReferenceNo' => '01JCN5N7X8VTR8W8X8W8X8W8X8', // 26 chars legacy fallback
+            'originalReferenceNo' => '20261115000001',
+            'latestTransactionStatus' => '00',
+            'merchantId' => 'MERCHANT-production-001',
+            'amount' => ['value' => '50000.00', 'currency' => 'IDR'],
+        ];
+
+        $webhookService = app(\App\Services\DanaWebhookService::class);
+        $webhookService->process(json_encode($webhookPayload), [
+            'x-timestamp' => now('Asia/Jakarta')->format('Y-m-d\\TH:i:sP'),
+            'x-signature' => 'valid-signature',
+            'x-partner-id' => $config->partner_id,
+            'x-external-id' => '01JCN5N7X8VTR8W8X8W8X8W8X8',
+        ]);
+
+        $this->assertSame('paid', $legacyPayment->fresh()->status);
     }
 
     private function createMerchantConfig(Merchant $merchant, string $environment, ?string $externalStoreId): MerchantPaymentConfig

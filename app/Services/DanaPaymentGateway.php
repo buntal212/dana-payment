@@ -166,7 +166,7 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         $expiresAt = now('Asia/Jakarta')->addMinutes(30);
         $orderPrefix = $isProduction ? 'Payment ' : 'Sandbox ';
         $payload = [
-            'partnerReferenceNo' => $this->partnerReferenceNo($payment),
+            'partnerReferenceNo' => $this->partnerReferenceNo($payment, $paymentMethod),
             'merchantId' => $credentials->merchantId,
             'amount' => ['value' => $this->amountFormatter->formatIdr($payment->amount_minor), 'currency' => $payment->currency],
             'validUpTo' => $expiresAt->format('Y-m-d\\TH:i:sP'),
@@ -316,9 +316,36 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         return $this->resolvePaymentMethod($payment);
     }
 
-    private function partnerReferenceNo(Payment $payment): string
+    private function partnerReferenceNo(Payment $payment, ?DanaSandboxPaymentMethod $paymentMethod = null): string
     {
-        return $payment->partner_reference_no ?? $payment->public_id;
+        $isQris = $paymentMethod === DanaSandboxPaymentMethod::Qris
+            || $this->resolvePaymentMethod($payment) === DanaSandboxPaymentMethod::Qris;
+
+        if (is_string($payment->partner_reference_no) && $payment->partner_reference_no !== '') {
+            if ($isQris && strlen($payment->partner_reference_no) > 25) {
+                $truncated = 'Q'.substr(hash('sha256', $payment->partner_reference_no), 0, 24);
+                $payment->partner_reference_no = $truncated;
+                if ($payment->exists) {
+                    $payment->updateQuietly(['partner_reference_no' => $truncated]);
+                }
+
+                return $truncated;
+            }
+
+            return $payment->partner_reference_no;
+        }
+
+        if ($isQris) {
+            $qrisRef = 'Q'.substr(hash('sha256', $payment->public_id), 0, 24);
+            $payment->partner_reference_no = $qrisRef;
+            if ($payment->exists) {
+                $payment->updateQuietly(['partner_reference_no' => $qrisRef]);
+            }
+
+            return $qrisRef;
+        }
+
+        return $payment->public_id;
     }
 
     private function logRequestDiagnostics(Payment $payment, string $body, string $timestamp, string $signature, string $privateKey): void

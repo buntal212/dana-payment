@@ -34,19 +34,26 @@ class PaymentService
                 }
 
                 $publicId = (string) Str::ulid();
-                $metadata = $attributes['metadata'] ?? null;
-                $isQris = (isset($attributes['payment_method']) && $attributes['payment_method'] === 'qris')
-                    || (is_array($metadata) && (
-                        ($metadata['payment_method'] ?? null) === 'qris'
-                        || ($metadata['udev_sandbox_payment_method'] ?? null) === 'qris'
-                    ));
+                $metadata = $attributes['metadata'] ?? [];
+                if (isset($attributes['payment_method']) && ! isset($metadata['payment_method'])) {
+                    $metadata['payment_method'] = $attributes['payment_method'];
+                }
+                $isQris = (($metadata['payment_method'] ?? null) === 'qris')
+                    || (($metadata['udev_sandbox_payment_method'] ?? null) === 'qris')
+                    || ((isset($attributes['payment_method']) && $attributes['payment_method'] === 'qris'));
+                $partnerRef = $attributes['partner_reference_no'] ?? null;
+                if (! is_string($partnerRef) || trim($partnerRef) === '') {
+                    $partnerRef = $isQris ? 'Q'.substr(hash('sha256', $publicId), 0, 24) : null;
+                } elseif ($isQris && strlen($partnerRef) > 25) {
+                    $partnerRef = 'Q'.substr(hash('sha256', $partnerRef), 0, 24);
+                }
                 $environment = ! empty($attributes['environment']) ? (string) $attributes['environment'] : 'sandbox';
                 $payment = Payment::query()->create([
                     'public_id' => $publicId,
                     // QRIS Create Order membatasi partnerReferenceNo menjadi 25
                     // karakter. Nilai ini dipersisten sebelum request pertama agar
                     // retry idempoten dan webhook/query tetap menunjuk payment sama.
-                    'partner_reference_no' => $isQris ? 'Q'.substr(hash('sha256', $publicId), 0, 24) : null,
+                    'partner_reference_no' => $partnerRef,
                     'merchant_id' => $merchant->getKey(),
                     'merchant_order_id' => $attributes['merchant_order_id'],
                     'provider' => 'dana',
