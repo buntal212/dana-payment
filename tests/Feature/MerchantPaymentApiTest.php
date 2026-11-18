@@ -15,6 +15,8 @@ class MerchantPaymentApiTest extends TestCase
 {
     use RefreshDatabase;
 
+    private string $defaultInquiryStatus = '00';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -37,7 +39,7 @@ class MerchantPaymentApiTest extends TestCase
                 return Http::response([
                     'responseCode' => '2005500',
                     'responseMessage' => 'Successful',
-                    'latestTransactionStatus' => '00',
+                    'latestTransactionStatus' => $this->defaultInquiryStatus,
                 ]);
             }
 
@@ -185,7 +187,63 @@ class MerchantPaymentApiTest extends TestCase
 
         $response->assertOk()
             ->assertJsonPath('dana_status.response_code', '2005500')
-            ->assertJsonPath('dana_status.latest_transaction_status', '00');
+            ->assertJsonPath('dana_status.latest_transaction_status', '00')
+            ->assertJsonPath('data.status', 'paid');
+
+        $this->assertSame('paid', $payment->fresh()->status);
+        $this->assertNotNull($payment->fresh()->paid_at);
+        $this->assertDatabaseHas('payment_events', [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'event_type' => 'payment.paid_sync',
+        ]);
+    }
+
+    public function test_merchant_can_inquiry_by_merchant_order_id_and_sync_expired_05(): void
+    {
+        $this->defaultInquiryStatus = '05';
+        [$merchant, $apiKey] = $this->merchantWithApiKey();
+        $payment = Payment::factory()->for($merchant)->create([
+            'status' => 'pending',
+            'amount_minor' => 10_000,
+            'merchant_order_id' => 'order-inquiry-expired-05',
+            'partner_reference_no' => 'Q123456789012345678901235',
+        ]);
+
+        // Calling inquiry using merchant_order_id instead of public_id
+        $response = $this->withToken($apiKey)->getJson("/api/v1/payments/{$payment->merchant_order_id}/inquiry");
+
+        $response->assertOk()
+            ->assertJsonPath('dana_status.response_code', '2005500')
+            ->assertJsonPath('dana_status.latest_transaction_status', '05')
+            ->assertJsonPath('data.status', 'expired');
+
+        $this->assertSame('expired', $payment->fresh()->status);
+        $this->assertDatabaseHas('payment_events', [
+            'merchant_id' => $merchant->id,
+            'payment_id' => $payment->id,
+            'event_type' => 'payment.expired_sync',
+        ]);
+    }
+
+    public function test_merchant_inquiry_when_status_is_01_leaves_status_pending(): void
+    {
+        $this->defaultInquiryStatus = '01';
+        [$merchant, $apiKey] = $this->merchantWithApiKey();
+        $payment = Payment::factory()->for($merchant)->create([
+            'status' => 'pending',
+            'amount_minor' => 10_000,
+            'merchant_order_id' => 'order-inquiry-pending-01',
+            'partner_reference_no' => 'Q123456789012345678901236',
+        ]);
+
+        $response = $this->withToken($apiKey)->getJson("/api/v1/payments/{$payment->merchant_order_id}/inquiry");
+
+        $response->assertOk()
+            ->assertJsonPath('dana_status.latest_transaction_status', '01')
+            ->assertJsonPath('data.status', 'pending');
+
+        $this->assertSame('pending', $payment->fresh()->status);
     }
 
     /**

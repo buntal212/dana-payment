@@ -134,6 +134,20 @@ class PaymentController extends Controller
                 'source' => 'provider',
                 'safe_details' => ['inquiry' => $inquiry],
             ]);
+        } elseif (($inquiry['latest_transaction_status'] ?? null) === '00' && $payment->status === 'pending') {
+            $payment->update([
+                'status' => 'paid',
+                'paid_at' => now(),
+            ]);
+            PaymentEvent::query()->create([
+                'merchant_id' => $merchant->getKey(),
+                'payment_id' => $payment->getKey(),
+                'event_type' => 'payment.paid_sync',
+                'old_status' => 'pending',
+                'new_status' => 'paid',
+                'source' => 'provider',
+                'safe_details' => ['inquiry' => $inquiry],
+            ]);
         }
 
         return response()->json([
@@ -230,7 +244,10 @@ class PaymentController extends Controller
         return Payment::query()
             ->forMerchant($this->merchant($request))
             ->where('environment', $keyEnv)
-            ->where('public_id', $publicId)
+            ->where(function ($query) use ($publicId): void {
+                $query->where('public_id', $publicId)
+                    ->orWhere('merchant_order_id', $publicId);
+            })
             ->firstOrFail();
     }
 }
