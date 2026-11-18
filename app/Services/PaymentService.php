@@ -264,7 +264,11 @@ class PaymentService
             : (is_array($metadata['udev_sandbox_payment_instruction'] ?? null)
                 ? $metadata['udev_sandbox_payment_instruction']
                 : []);
-        $paymentCode = $instruction['payment_code'] ?? null;
+        $paymentCode = $instruction['payment_code']
+            ?? $instruction['qr_content']
+            ?? $metadata['qr_content']
+            ?? $metadata['payment_code']
+            ?? null;
 
         return $payment->expires_at !== null
             && ((is_string($payment->checkout_url) && filter_var($payment->checkout_url, FILTER_VALIDATE_URL))

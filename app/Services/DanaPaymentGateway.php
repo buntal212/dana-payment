@@ -233,14 +233,29 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         }
 
         $checkoutUrl = is_string($responseBody['webRedirectUrl'] ?? null) ? $responseBody['webRedirectUrl'] : null;
-        $qrContent = $responseBody['additionalInfo']['qrContent'] ?? ($responseBody['qrContent'] ?? null);
-        if (! is_string($qrContent) || trim($qrContent) === '') {
-            $qrContent = null;
-        }
-        $paymentCode = $responseBody['additionalInfo']['paymentCode'] ?? null;
-        if (! is_string($paymentCode) || trim($paymentCode) === '') {
-            $paymentCode = $qrContent;
-        }
+
+        $qrCandidate = $responseBody['additionalInfo']['qrContent']
+            ?? ($responseBody['additionalInfo']['qrCode']
+            ?? ($responseBody['qrContent']
+            ?? ($responseBody['qrCode']
+            ?? ($responseBody['payOptionDetails'][0]['additionalInfo']['qrContent']
+            ?? ($responseBody['payOptionDetails'][0]['additionalInfo']['qrCode']
+            ?? ($responseBody['payOptionDetails'][0]['qrContent']
+            ?? ($responseBody['payOptionDetails'][0]['qrCode']
+            ?? null)))))));
+
+        $qrContent = is_string($qrCandidate) && trim($qrCandidate) !== '' ? trim($qrCandidate) : null;
+
+        $codeCandidate = $responseBody['additionalInfo']['paymentCode']
+            ?? ($responseBody['paymentCode']
+            ?? ($responseBody['payOptionDetails'][0]['additionalInfo']['paymentCode']
+            ?? ($responseBody['payOptionDetails'][0]['paymentCode']
+            ?? null)));
+
+        $paymentCode = is_string($codeCandidate) && trim($codeCandidate) !== ''
+            ? trim($codeCandidate)
+            : $qrContent;
+
         if ($paymentMethod === DanaSandboxPaymentMethod::DanaWallet && $checkoutUrl === null) {
             throw new RuntimeException("Respons DANA Wallet {$envLabel} tidak menyediakan checkout URL.");
         }
@@ -271,16 +286,17 @@ class DanaPaymentGateway implements PaymentGatewayInterface
         }
 
         if ($paymentMethod === DanaSandboxPaymentMethod::Qris) {
-            $qr = ($qrContent !== null && $this->isValidEmvcoQris($qrContent))
-                ? $qrContent
-                : (is_string($paymentCode) && $this->isValidEmvcoQris($paymentCode) ? trim($paymentCode) : null);
-            if ($qr !== null) {
+            $candidate = $qrContent ?? $paymentCode;
+            $isValidEmvco = $candidate !== null && $this->isValidEmvcoQris($candidate);
+            $isQrisMpm = $candidate !== null && ($isValidEmvco || (strlen($candidate) >= 14 && str_starts_with($candidate, '000201')));
+
+            if ($isQrisMpm) {
                 return [
                     'method' => $paymentMethod->value,
                     'label' => $paymentMethod->label(),
                     'type' => 'qris_mpm',
-                    'qr_content' => $qr,
-                    'payment_code' => $paymentCode ?? $qr,
+                    'qr_content' => $candidate,
+                    'payment_code' => $paymentCode ?? $candidate,
                     'message' => 'Pindai QRIS menggunakan aplikasi DANA atau aplikasi pembayaran pendukung QRIS.',
                 ];
             }

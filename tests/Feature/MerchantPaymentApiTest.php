@@ -16,6 +16,7 @@ class MerchantPaymentApiTest extends TestCase
     use RefreshDatabase;
 
     private string $defaultInquiryStatus = '00';
+    public ?\Closure $customCreateOrderHandler = null;
 
     protected function setUp(): void
     {
@@ -41,6 +42,9 @@ class MerchantPaymentApiTest extends TestCase
                     'responseMessage' => 'Successful',
                     'latestTransactionStatus' => $this->defaultInquiryStatus,
                 ]);
+            }
+            if ($this->customCreateOrderHandler !== null && str_contains($request->url(), 'payment-host-to-host.htm')) {
+                return ($this->customCreateOrderHandler)($request);
             }
 
             return Http::response([
@@ -246,6 +250,108 @@ class MerchantPaymentApiTest extends TestCase
         $this->assertSame('pending', $payment->fresh()->status);
     }
 
+    public function test_qris_checkout_extracts_qr_content_properly_and_exposes_instruction_at_top_level(): void
+    {
+        $dummyQris = '00020101021226670016ID.DANA.WWW011893600911000000000002150000000000000000303UMI51440014ID.CO.QRIS.WWW02150000000000000000303UMI5204581453033605802ID5911UDEV0016007BANDUNG61054011562070703A016304ABCD';
+        $this->customCreateOrderHandler = fn () => Http::response([
+            'responseCode' => '2005400',
+            'referenceNo' => 'DANA-QRIS-REF-001',
+            'additionalInfo' => [
+                'qrContent' => $dummyQris,
+            ],
+        ]);
+
+        [$merchant, $apiKey] = $this->merchantWithApiKey();
+
+        $payload = [
+            'merchant_order_id' => 'order-qris-001',
+            'amount_minor' => 500_000,
+            'currency' => 'IDR',
+            'metadata' => [
+                'payment_method' => 'qris',
+            ],
+        ];
+
+        $response = $this->withToken($apiKey)->postJson('/api/v1/payments', $payload, ['Idempotency-Key' => 'idemp-qris-1']);
+
+        $response->assertSuccessful()
+            ->assertJsonPath('data.status', 'pending')
+            ->assertJsonPath('data.payment_instruction.type', 'qris_mpm')
+            ->assertJsonPath('data.payment_instruction.qr_content', $dummyQris)
+            ->assertJsonPath('data.metadata.payment_instruction.qr_content', $dummyQris);
+
+        $payment = Payment::query()->where('merchant_order_id', 'order-qris-001')->firstOrFail();
+        $this->assertSame($dummyQris, $payment->metadata['payment_instruction']['qr_content']);
+    }
+
+    public function test_qris_checkout_accepts_qr_code_and_pay_option_details_structures(): void
+    {
+        $dummyQris = '00020101021226670016ID.DANA.WWW011893600911000000000002150000000000000000303UMI51440014ID.CO.QRIS.WWW02150000000000000000303UMI5204581453033605802ID5911UDEV0016007BANDUNG61054011562070703A0163041234';
+        $this->customCreateOrderHandler = fn () => Http::response([
+            'responseCode' => '2005400',
+            'referenceNo' => 'DANA-QRIS-REF-002',
+            'payOptionDetails' => [
+                [
+                    'payMethod' => 'NETWORK_PAY',
+                    'payOption' => 'NETWORK_PAY_PG_QRIS',
+                    'additionalInfo' => [
+                        'qrCode' => $dummyQris,
+                    ],
+                ],
+            ],
+        ]);
+
+        [$merchant, $apiKey] = $this->merchantWithApiKey();
+
+        $payload = [
+            'merchant_order_id' => 'order-qris-002',
+            'amount_minor' => 25_000,
+            'currency' => 'IDR',
+            'metadata' => [
+                'payment_method' => 'qris',
+            ],
+        ];
+
+        $response = $this->withToken($apiKey)->postJson('/api/v1/payments', $payload, ['Idempotency-Key' => 'idemp-qris-2']);
+
+        $response->assertSuccessful()
+            ->assertJsonPath('data.status', 'pending')
+            ->assertJsonPath('data.payment_instruction.type', 'qris_mpm')
+            ->assertJsonPath('data.payment_instruction.qr_content', $dummyQris);
+    }
+
+    public function test_retry_create_order_when_dana_reports_status_01_is_blocked_with_conflict(): void
+    {
+        $this->defaultInquiryStatus = '01';
+        [$merchant, $apiKey] = $this->merchantWithApiKey();
+
+        $idempotencyKey = 'idemp-retry-01';
+        $payment = Payment::factory()->for($merchant)->create([
+            'merchant_order_id' => 'order-retry-01',
+            'status' => 'pending',
+            'amount_minor' => 10_000,
+            'currency' => 'IDR',
+            'idempotency_key' => $idempotencyKey,
+            'partner_reference_no' => 'Q123456789012345678901299',
+            'checkout_url' => null,
+            'metadata' => ['payment_method' => 'qris'],
+        ]);
+
+        $payload = [
+            'merchant_order_id' => 'order-retry-01',
+            'amount_minor' => 10_000,
+            'currency' => 'IDR',
+            'metadata' => [
+                'payment_method' => 'qris',
+            ],
+        ];
+
+        $response = $this->withToken($apiKey)->postJson('/api/v1/payments', $payload, ['Idempotency-Key' => $idempotencyKey]);
+
+        $response->assertStatus(409)
+            ->assertJsonPath('message', 'DANA melaporkan transaksi sudah terdaftar dengan status 01; pembuatan order baru diblokir.');
+    }
+
     /**
      * @param  array<string, mixed>  $merchantAttributes
      * @return array{0: Merchant, 1: string}
@@ -268,6 +374,7 @@ class MerchantPaymentApiTest extends TestCase
                 'channel_id' => '95221',
                 'notification_url' => 'https://merchant.example/api/v1/webhooks/dana',
                 'mcc' => '5814',
+                'external_store_id' => 'STORE-001',
             ],
         ]);
         $result = app(MerchantApiKeyService::class)->create($merchant, 'feature-test', $expiresAt, ['payments:*']);

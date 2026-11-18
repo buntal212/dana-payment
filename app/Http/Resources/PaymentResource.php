@@ -14,6 +14,11 @@ class PaymentResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
+        $metadata = is_array($this->metadata) ? $this->metadata : [];
+        $instruction = $metadata['payment_instruction']
+            ?? $metadata['udev_sandbox_payment_instruction']
+            ?? null;
+
         return [
             'id' => $this->public_id,
             'partner_reference_no' => $this->partner_reference_no,
@@ -26,6 +31,7 @@ class PaymentResource extends JsonResource
             'expires_at' => $this->expires_at,
             'paid_at' => $this->paid_at,
             'failed_at' => $this->failed_at,
+            'payment_instruction' => $instruction,
             'metadata' => $this->metadata,
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
